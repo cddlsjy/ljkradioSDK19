@@ -1,0 +1,2284 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:math' show min;
+import 'dart:ui';
+
+import 'package:PiliPlus/utils/storage_key.dart';
+import 'package:flutter/material.dart';
+
+import 'package:PiliPlus/common/style.dart';
+import 'package:PiliPlus/common/widgets/pair.dart';
+import 'package:PiliPlus/common/widgets/progress_bar/segment_progress_bar.dart';
+import 'package:PiliPlus/grpc/bilibili/app/listener/v1.pbenum.dart'
+    show PlaylistSource;
+import 'package:PiliPlus/http/fav.dart';
+import 'package:PiliPlus/http/init.dart';
+import 'package:PiliPlus/http/loading_state.dart';
+import 'package:PiliPlus/http/user.dart';
+import 'package:PiliPlus/http/video.dart';
+import 'package:PiliPlus/main.dart';
+import 'package:PiliPlus/models/common/account_type.dart';
+import 'package:PiliPlus/models/common/sponsor_block/action_type.dart';
+import 'package:PiliPlus/models/common/sponsor_block/post_segment_model.dart';
+import 'package:PiliPlus/models/common/sponsor_block/segment_model.dart';
+import 'package:PiliPlus/models/common/sponsor_block/segment_type.dart';
+import 'package:PiliPlus/models/common/video/audio_quality.dart';
+import 'package:PiliPlus/models/common/video/source_type.dart';
+import 'package:PiliPlus/models/common/video/subtitle_pref_type.dart';
+import 'package:PiliPlus/models/common/video/video_decode_type.dart';
+import 'package:PiliPlus/models/common/video/video_quality.dart';
+import 'package:PiliPlus/models/common/video/video_type.dart';
+import 'package:PiliPlus/models/video/play/url.dart';
+import 'package:PiliPlus/models_new/download/bili_download_entry_info.dart';
+import 'package:PiliPlus/models_new/media_list/media_list.dart';
+import 'package:PiliPlus/models_new/pgc/pgc_info_model/result.dart';
+import 'package:PiliPlus/models_new/video/video_detail/data.dart';
+import 'package:PiliPlus/models_new/video/video_detail/episode.dart' as ugc;
+import 'package:PiliPlus/models_new/video/video_detail/page.dart';
+import 'package:PiliPlus/models_new/video/video_pbp/data.dart';
+import 'package:PiliPlus/models_new/video/video_play_info/subtitle.dart';
+import 'package:PiliPlus/models_new/video/video_stein_edgeinfo/data.dart';
+import 'package:PiliPlus/pages/audio/view.dart';
+import 'package:PiliPlus/pages/common/publish/publish_route.dart';
+import 'package:PiliPlus/pages/search/widgets/search_text.dart';
+import 'package:PiliPlus/pages/sponsor_block/block_mixin.dart';
+import 'package:PiliPlus/pages/video/download_panel/view.dart';
+import 'package:PiliPlus/pages/video/introduction/pgc/controller.dart';
+import 'package:PiliPlus/pages/video/introduction/ugc/controller.dart';
+import 'package:PiliPlus/pages/video/medialist/view.dart';
+import 'package:PiliPlus/pages/video/note/view.dart';
+import 'package:PiliPlus/pages/video/post_panel/view.dart';
+import 'package:PiliPlus/pages/video/send_danmaku/view.dart';
+import 'package:PiliPlus/pages/video/widgets/header_control.dart';
+import 'package:PiliPlus/plugin/pl_player/controller.dart';
+import 'package:PiliPlus/utils/storage_key.dart';
+import 'package:PiliPlus/plugin/pl_player/models/data_source.dart';
+import 'package:PiliPlus/plugin/pl_player/models/heart_beat_type.dart';
+import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
+import 'package:PiliPlus/services/download/download_service.dart';
+import 'package:PiliPlus/utils/accounts.dart';
+import 'package:PiliPlus/utils/extension/context_ext.dart';
+import 'package:PiliPlus/utils/extension/file_ext.dart';
+import 'package:PiliPlus/utils/extension/iterable_ext.dart';
+import 'package:PiliPlus/utils/extension/num_ext.dart';
+import 'package:PiliPlus/utils/extension/size_ext.dart';
+import 'package:PiliPlus/utils/page_utils.dart';
+import 'package:PiliPlus/utils/path_utils.dart';
+import 'package:PiliPlus/utils/platform_utils.dart';
+import 'package:PiliPlus/utils/storage.dart';
+import 'package:PiliPlus/utils/storage_key.dart';
+import 'package:PiliPlus/utils/storage_pref.dart';
+import 'package:PiliPlus/utils/utils.dart';
+import 'package:PiliPlus/utils/video_utils.dart';
+import 'package:extended_nested_scroll_view/extended_nested_scroll_view.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
+import 'package:flutter/material.dart';
+import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
+import 'package:flutter_volume_controller/flutter_volume_controller.dart';
+import 'package:get/get.dart';
+import 'package:hive_ce/hive.dart';
+import 'package:media_kit/media_kit.dart' hide Subtitle;
+import 'package:path/path.dart' as path;
+
+class VideoDetailController extends GetxController
+    with GetTickerProviderStateMixin, BlockMixin {
+  /// 路由传参
+  late final Map args;
+  late String bvid;
+  late int aid;
+  late final RxInt cid;
+  int? epId;
+  int? seasonId;
+  int? pgcType;
+  late final String heroTag;
+  late final RxString cover;
+
+  // 视频类型 默认投稿视频
+  late final VideoType videoType;
+  @override
+  late final isUgc = videoType == VideoType.ugc;
+  VideoType? _actualVideoType;
+
+  // 页面来源 稍后再看 收藏夹
+  late bool isPlayAll;
+  late SourceType sourceType;
+  late BiliDownloadEntryInfo entry;
+  late bool isFileSource;
+  late bool _mediaDesc = false;
+  late final RxList<MediaListItemModel> mediaList = <MediaListItemModel>[].obs;
+  late String watchLaterTitle;
+
+  /// tabs相关配置
+  late TabController tabCtr;
+
+  // 请求返回的视频信息
+  late PlayUrlModel data;
+  final RxBool videoState = false.obs;
+
+  /// 播放器配置 画质 音质 解码格式
+  final Rxn<VideoQuality> currentVideoQa = Rxn<VideoQuality>();
+  AudioQuality? currentAudioQa;
+  late VideoDecodeFormatType currentDecodeFormats;
+
+  // 是否开始自动播放 存在多p的情况下，第二p需要为true
+  final RxBool _autoPlay = Pref.autoPlayEnable.obs;
+
+  final videoPlayerKey = GlobalKey();
+  final childKey = GlobalKey<ScaffoldState>();
+
+  final plPlayerController = PlPlayerController.getInstance()
+    ..brightness.value = -1;
+  bool get setSystemBrightness => plPlayerController.setSystemBrightness;
+
+  late VideoItem firstVideo;
+  String? videoUrl;
+  String? audioUrl;
+  Duration? defaultST;
+  Duration? playedTime;
+  String get playedTimePos {
+    final pos = playedTime?.inMilliseconds;
+    return pos == null || pos == 0 ? '' : '?t=${pos / 1000}';
+  }
+
+  // 亮度
+  double? brightness;
+
+  late final headerCtrKey = GlobalKey<TimeBatteryMixin>();
+
+  Box setting = GStorage.setting;
+
+  // 预设的解码格式
+  late String cacheDecode = Pref.defaultDecode; // def avc
+  late String cacheSecondDecode = Pref.secondDecode; // def av1
+
+  bool get showReply => isFileSource
+      ? false
+      : isUgc
+      ? plPlayerController.showVideoReply
+      : plPlayerController.showBangumiReply;
+
+  bool get showRelatedVideo =>
+      isFileSource ? false : plPlayerController.showRelatedVideo;
+
+  ScrollController? introScrollCtr;
+  ScrollController get effectiveIntroScrollCtr =>
+      introScrollCtr ??= ScrollController();
+
+  int? seasonCid;
+  late final RxInt seasonIndex = 0.obs;
+
+  PlayerStatus? playerStatus;
+
+  late final scrollKey = GlobalKey<ExtendedNestedScrollViewState>();
+  late final RxBool isVertical = false.obs;
+  late final RxDouble scrollRatio = 0.0.obs;
+  ScrollController? _scrollCtr;
+  ScrollController get scrollCtr =>
+      _scrollCtr ??= ScrollController()..addListener(scrollListener);
+  late bool isExpanding = false;
+  late bool isCollapsing = false;
+  AnimationController? animController;
+
+  AnimationController get animationController =>
+      animController ??= AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 200),
+      );
+  late double minVideoHeight;
+  late double maxVideoHeight;
+  late double videoHeight;
+
+  void animToTop() {
+    final outerController = scrollKey.currentState!.outerController;
+    if (outerController.hasClients) {
+      outerController.animateTo(
+        outerController.offset,
+        duration: const Duration(milliseconds: 500),
+        curve: Curves.easeInOut,
+      );
+    }
+  }
+
+  @pragma('vm:notify-debugger-on-exception')
+  void setVideoHeight() {
+    try {
+      final isVertical = firstVideo.width != null && firstVideo.height != null
+          ? firstVideo.width! < firstVideo.height!
+          : false;
+      if (!scrollCtr.hasClients) {
+        videoHeight = isVertical ? maxVideoHeight : minVideoHeight;
+        this.isVertical.value = isVertical;
+        return;
+      }
+      if (this.isVertical.value != isVertical) {
+        this.isVertical.value = isVertical;
+        double videoHeight = isVertical ? maxVideoHeight : minVideoHeight;
+        if (this.videoHeight != videoHeight) {
+          if (videoHeight > this.videoHeight) {
+            // current minVideoHeight
+            isExpanding = true;
+            animationController.forward(
+              from: (minVideoHeight - scrollCtr.offset) / maxVideoHeight,
+            );
+            this.videoHeight = maxVideoHeight;
+          } else {
+            // current maxVideoHeight
+            final currentHeight = (maxVideoHeight - scrollCtr.offset)
+                .toPrecision(2);
+            double minVideoHeightPrecise = minVideoHeight.toPrecision(2);
+            if (currentHeight == minVideoHeightPrecise) {
+              isExpanding = true;
+              this.videoHeight = minVideoHeight;
+              animationController.forward(from: 1);
+            } else if (currentHeight < minVideoHeightPrecise) {
+              // expand
+              isExpanding = true;
+              animationController.forward(from: currentHeight / minVideoHeight);
+              this.videoHeight = minVideoHeight;
+            } else {
+              // collapse
+              isCollapsing = true;
+              animationController.forward(
+                from: scrollCtr.offset / (maxVideoHeight - minVideoHeight),
+              );
+              this.videoHeight = minVideoHeight;
+            }
+          }
+        }
+      } else {
+        if (scrollCtr.offset != 0) {
+          isExpanding = true;
+          animationController.forward(from: 1 - scrollCtr.offset / videoHeight);
+        }
+      }
+    } catch (_) {}
+  }
+
+  void scrollListener() {
+    if (scrollCtr.hasClients) {
+      if (scrollCtr.offset == 0) {
+        scrollRatio.value = 0;
+      } else {
+        double offset = scrollCtr.offset - (videoHeight - minVideoHeight);
+        if (offset > 0) {
+          scrollRatio.value = clampDouble(
+            offset.toPrecision(2) /
+                (minVideoHeight - kToolbarHeight).toPrecision(2),
+            0.0,
+            1.0,
+          );
+        } else {
+          scrollRatio.value = 0;
+        }
+      }
+    }
+  }
+
+  final isLoginVideo = Accounts.get(AccountType.video).isLogin;
+
+  late final watchProgress = GStorage.watchProgress;
+  void cacheLocalProgress() {
+    if (plPlayerController.playerStatus.isCompleted) {
+      watchProgress.put(cid.value.toString(), entry.totalTimeMilli);
+    } else if (playedTime case final playedTime?) {
+      watchProgress.put(cid.value.toString(), playedTime.inMilliseconds);
+    }
+  }
+
+  /// 保存当前视频信息用于下次启动时自动播放
+  void saveLastVideoInfo() {
+    if (!Pref.enableSaveLastData) return;
+    try {
+      final videoBox = GStorage.video;
+      videoBox.put(LastVideoKey.lastVideoBvid, bvid);
+      videoBox.put(LastVideoKey.lastVideoCid, cid.value);
+      videoBox.put(LastVideoKey.lastVideoAid, aid);
+      videoBox.put(LastVideoKey.lastVideoBusiness, videoType.name);
+
+      // 获取标题和封面
+      String? title;
+      String? cover;
+      int? pageIndex;
+
+      if (isUgc) {
+        try {
+          final introCtr = Get.find<UgcIntroController>(tag: heroTag);
+          title = introCtr.videoDetail.value.title;
+          cover = introCtr.videoDetail.value.pic;
+          // 获取当前分P索引
+          final pages = introCtr.videoDetail.value.pages;
+          if (pages != null && pages.isNotEmpty) {
+            pageIndex = pages.indexWhere((page) => page.cid == cid.value);
+            if (pageIndex == -1) pageIndex = 0;
+          }
+        } catch (_) {}
+      } else {
+        try {
+          final introCtr = Get.find<PgcIntroController>(tag: heroTag);
+          title = introCtr.videoDetail.value.title;
+          cover = introCtr.videoDetail.value.pic;
+        } catch (_) {}
+        // PGC视频保存epid
+        if (epId != null) {
+          videoBox.put(LastVideoKey.lastVideoEpid, epId);
+        }
+      }
+
+      if (title != null) {
+        videoBox.put(LastVideoKey.lastVideoTitle, title);
+      }
+      if (cover != null) {
+        videoBox.put(LastVideoKey.lastVideoCover, cover);
+      }
+      if (pageIndex != null) {
+        videoBox.put(LastVideoKey.lastVideoPage, pageIndex);
+      }
+
+      // 保存当前播放进度
+      if (playedTime != null) {
+        videoBox.put(LastVideoKey.lastVideoTimestamp, playedTime!.inMilliseconds);
+      }
+    } catch (_) {
+      // 忽略保存错误，不影响正常播放
+    }
+  }
+
+  void initFileSource(BiliDownloadEntryInfo entry, {bool isInit = true}) {
+    this.entry = entry;
+    firstVideo = VideoItem(
+      quality: VideoQuality.fromCode(entry.preferedVideoQuality),
+      width: entry.ep?.width ?? entry.pageData?.width ?? 1,
+      height: entry.ep?.height ?? entry.pageData?.height ?? 1,
+    );
+    if (watchProgress.get(cid.value.toString()) case final int progress?) {
+      if (progress >= entry.totalTimeMilli - 400) {
+        defaultST = Duration.zero;
+      } else {
+        defaultST = Duration(milliseconds: progress);
+      }
+    } else {
+      defaultST = Duration.zero;
+    }
+    data = PlayUrlModel(timeLength: entry.totalTimeMilli);
+    if (isInit) {
+      Future.delayed(const Duration(milliseconds: 120), setVideoHeight);
+    } else {
+      setVideoHeight();
+    }
+  }
+
+  @override
+  void onInit() {
+    super.onInit();
+    args = Get.arguments;
+    videoType = args['videoType'];
+    if (videoType == VideoType.pgc) {
+      if (!isLoginVideo) {
+        _actualVideoType = VideoType.ugc;
+      }
+    } else if (args['pgcApi'] == true) {
+      _actualVideoType = VideoType.pgc;
+    }
+
+    bvid = args['bvid'];
+    aid = args['aid'];
+    cid = RxInt(args['cid']);
+    epId = args['epId'];
+    seasonId = args['seasonId'];
+    pgcType = args['pgcType'];
+    heroTag = args['heroTag'];
+    cover = RxString(args['cover'] ?? '');
+
+    sourceType = args['sourceType'] ?? SourceType.normal;
+    isFileSource = sourceType == SourceType.file;
+    isPlayAll = sourceType != SourceType.normal && !isFileSource;
+    if (isFileSource) {
+      initFileSource(args['entry']);
+    } else if (isPlayAll) {
+      watchLaterTitle = args['favTitle'];
+      _mediaDesc = args['desc'];
+      getMediaList();
+    }
+
+    tabCtr = TabController(
+      length: 2,
+      vsync: this,
+      initialIndex: Pref.defaultShowComment ? 1 : 0,
+    );
+  }
+
+  Future<void> getMediaList({
+    bool isReverse = false,
+    bool isLoadPrevious = false,
+  }) async {
+    final count = args['count'];
+    if (!isReverse && count != null && mediaList.length >= count) {
+      return;
+    }
+    final res = await UserHttp.getMediaList(
+      type: args['mediaType'] ?? sourceType.mediaType,
+      bizId: args['mediaId'] ?? -1,
+      ps: 20,
+      direction: isLoadPrevious ? true : false,
+      oid: isReverse
+          ? null
+          : mediaList.isEmpty
+          ? args['isContinuePlaying'] == true
+                ? args['oid']
+                : null
+          : isLoadPrevious
+          ? mediaList.first.aid
+          : mediaList.last.aid,
+      otype: isReverse
+          ? null
+          : mediaList.isEmpty
+          ? null
+          : isLoadPrevious
+          ? mediaList.first.type
+          : mediaList.last.type,
+      desc: _mediaDesc,
+      sortField: args['sortField'] ?? 1,
+      withCurrent: mediaList.isEmpty && args['isContinuePlaying'] == true
+          ? true
+          : false,
+    );
+    if (res case Success(:final response)) {
+      if (response.mediaList.isNotEmpty) {
+        if (isReverse) {
+          mediaList.value = response.mediaList;
+          for (final item in mediaList) {
+            if (item.cid != null) {
+              try {
+                Get.find<UgcIntroController>(
+                  tag: heroTag,
+                ).onChangeEpisode(item);
+              } catch (_) {}
+              break;
+            }
+          }
+        } else if (isLoadPrevious) {
+          mediaList.insertAll(0, response.mediaList);
+        } else {
+          mediaList.addAll(response.mediaList);
+        }
+      }
+    } else {
+      res.toast();
+    }
+  }
+
+  // 稍后再看面板展开
+  void showMediaListPanel(BuildContext context) {
+    if (mediaList.isNotEmpty) {
+      Widget panel() => MediaListPanel(
+        mediaList: mediaList,
+        onChangeEpisode: (episode) {
+          try {
+            Get.find<UgcIntroController>(tag: heroTag).onChangeEpisode(episode);
+          } catch (_) {}
+        },
+        panelTitle: watchLaterTitle,
+        bvid: bvid,
+        count: args['count'],
+        loadMoreMedia: getMediaList,
+        desc: _mediaDesc,
+        onReverse: () {
+          _mediaDesc = !_mediaDesc;
+          getMediaList(isReverse: true);
+        },
+        loadPrevious: args['isContinuePlaying'] == true
+            ? () => getMediaList(isLoadPrevious: true)
+            : null,
+        onDelete:
+            sourceType == SourceType.watchLater ||
+                (sourceType == SourceType.fav && args['isOwner'] == true)
+            ? (item, index) async {
+                if (sourceType == SourceType.watchLater) {
+                  final res = await UserHttp.toViewDel(
+                    aids: item.aid.toString(),
+                  );
+                  if (res.isSuccess) {
+                    mediaList.removeAt(index);
+                  }
+                } else {
+                  final res = await FavHttp.favVideo(
+                    resources: '${item.aid}:${item.type}',
+                    delIds: '${args['mediaId']}',
+                  );
+                  if (res.isSuccess) {
+                    mediaList.removeAt(index);
+                    SmartDialog.showToast('取消收藏');
+                  } else {
+                    res.toast();
+                  }
+                }
+              }
+            : null,
+      );
+      if (plPlayerController.isFullScreen.value || showVideoSheet) {
+        PageUtils.showVideoBottomSheet(
+          context,
+          child: plPlayerController.darkVideoPage && MyApp.darkThemeData != null
+              ? Theme(
+                  data: MyApp.darkThemeData!,
+                  child: panel(),
+                )
+              : panel(),
+          isFullScreen: () => plPlayerController.isFullScreen.value,
+        );
+      } else {
+        childKey.currentState?.showBottomSheet(
+          backgroundColor: Colors.transparent,
+          constraints: const BoxConstraints(),
+          (context) => panel(),
+        );
+      }
+    } else {
+      getMediaList();
+    }
+  }
+
+  bool isPortrait = true;
+
+  bool get horizontalScreen => plPlayerController.horizontalScreen;
+
+  bool get showVideoSheet =>
+      (!horizontalScreen && !isPortrait) || plPlayerController.isDesktopPip;
+
+  @override
+  late final RxString videoLabel = ''.obs;
+  @override
+  int? get timeLength => data.timeLength;
+  @override
+  BlockConfigMixin get blockConfig => plPlayerController;
+  @override
+  Player? get player => plPlayerController.videoPlayerController;
+  @override
+  bool get isFullScreen => plPlayerController.isFullScreen.value;
+  @override
+  bool get autoPlay => _autoPlay.value;
+  set autoPlay(bool value) => _autoPlay.value = value;
+  @override
+  bool get preInitPlayer => plPlayerController.preInitPlayer;
+  @override
+  int get currPosInMilliseconds =>
+      defaultST?.inMilliseconds ?? plPlayerController.position.inMilliseconds;
+  @override
+  Future<void> seekTo(Duration duration, {required bool isSeek}) =>
+      plPlayerController.seekTo(duration, isSeek: isSeek);
+
+  @override
+  Widget buildItem(Object item, Animation<double> animation) {
+    final theme = Get.theme;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: SlideTransition(
+        position: animation.drive(
+          Tween<Offset>(
+            begin: const Offset(-1.0, 0.0),
+            end: Offset.zero,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.only(top: 5),
+          child: GestureDetector(
+            onHorizontalDragUpdate: (DragUpdateDetails details) {
+              if (details.delta.dx < 0) {
+                onRemoveItem(listData.indexOf(item), item);
+              }
+            },
+            child: SearchText(
+              bgColor: theme.colorScheme.secondaryContainer.withValues(
+                alpha: 0.8,
+              ),
+              textColor: theme.colorScheme.onSecondaryContainer,
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              fontSize: 14,
+              text: item is SegmentModel
+                  ? '跳过: ${item.segmentType.shortTitle}'
+                  : '上次看到第${(item as int) + 1}P，点击跳转',
+              onTap: (_) {
+                if (item is int) {
+                  try {
+                    UgcIntroController ugcIntroController =
+                        Get.find<UgcIntroController>(tag: heroTag);
+                    Part part =
+                        ugcIntroController.videoDetail.value.pages![item];
+                    ugcIntroController.onChangeEpisode(part);
+                    SmartDialog.showToast('已跳至第${item + 1}P');
+                  } catch (e) {
+                    if (kDebugMode) debugPrint('$e');
+                    SmartDialog.showToast('跳转失败');
+                  }
+                  onRemoveItem(listData.indexOf(item), item);
+                } else if (item is SegmentModel) {
+                  onSkip(item, isSeek: false);
+                  onRemoveItem(listData.indexOf(item), item);
+                }
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  ({int mode, int fontSize, Color color})? dmConfig;
+  String? savedDanmaku;
+
+  /// 发送弹幕
+  Future<void> showShootDanmakuSheet() async {
+    if (plPlayerController.dmState.contains(cid.value)) {
+      SmartDialog.showToast('UP主已关闭弹幕');
+      return;
+    }
+    final isPlaying =
+        _autoPlay.value && plPlayerController.playerStatus.isPlaying;
+    if (isPlaying) {
+      await plPlayerController.pause();
+    }
+    await Get.key.currentState!.push(
+      PublishRoute(
+        pageBuilder: (buildContext, animation, secondaryAnimation) {
+          return SendDanmakuPanel(
+            cid: cid.value,
+            bvid: bvid,
+            progress: plPlayerController.position.inMilliseconds,
+            initialValue: savedDanmaku,
+            onSave: (danmaku) => savedDanmaku = danmaku,
+            onSuccess: (danmakuModel) {
+              savedDanmaku = null;
+              plPlayerController.danmakuController?.addDanmaku(danmakuModel);
+            },
+            darkVideoPage: plPlayerController.darkVideoPage,
+            dmConfig: dmConfig,
+            onSaveDmConfig: (dmConfig) => this.dmConfig = dmConfig,
+          );
+        },
+      ),
+    );
+    if (isPlaying) {
+      plPlayerController.play();
+    }
+  }
+
+  VideoItem findVideoByQa(int qa) {
+    /// 根据currentVideoQa和currentDecodeFormats 重新设置videoUrl
+    final videoList = data.dash!.video!.where((i) => i.id == qa).toList();
+
+    final currentDecodeFormats = this.currentDecodeFormats.codes;
+    final defaultDecodeFormats = VideoDecodeFormatType.fromString(
+      cacheDecode,
+    ).codes;
+    final secondDecodeFormats = VideoDecodeFormatType.fromString(
+      cacheSecondDecode,
+    ).codes;
+
+    VideoItem? video;
+    for (final i in videoList) {
+      final codec = i.codecs!;
+      if (currentDecodeFormats.any(codec.startsWith)) {
+        video = i;
+        break;
+      } else if (defaultDecodeFormats.any(codec.startsWith)) {
+        video = i;
+      } else if (video == null && secondDecodeFormats.any(codec.startsWith)) {
+        video = i;
+      }
+    }
+    return video ?? videoList.first;
+  }
+
+  /// 更新画质、音质
+  void updatePlayer() {
+    final currentVideoQa = this.currentVideoQa.value;
+    if (currentVideoQa == null) return;
+    _autoPlay.value = true;
+    playedTime = plPlayerController.position;
+    plPlayerController
+      ..isBuffering.value = false
+      ..buffered.value = Duration.zero;
+
+    final video = findVideoByQa(currentVideoQa.code);
+    if (firstVideo.codecs != video.codecs) {
+      currentDecodeFormats = VideoDecodeFormatType.fromString(video.codecs!);
+    }
+    firstVideo = video;
+    videoUrl = VideoUtils.getCdnUrl(firstVideo.playUrls);
+
+    /// 根据currentAudioQa 重新设置audioUrl
+    if (currentAudioQa != null) {
+      final firstAudio = data.dash!.audio!.firstWhere(
+        (i) => i.id == currentAudioQa!.code,
+        orElse: () => data.dash!.audio!.first,
+      );
+      audioUrl = VideoUtils.getCdnUrl(firstAudio.playUrls, isAudio: true);
+    }
+
+    playerInit();
+  }
+
+  Future<void>? _initPlayerIfNeeded(bool autoFullScreenFlag) {
+    if (_autoPlay.value ||
+        (plPlayerController.preInitPlayer && !plPlayerController.processing) &&
+            (isFileSource
+                ? true
+                : videoPlayerKey.currentState?.mounted == true)) {
+      return playerInit(
+        autoFullScreenFlag: autoFullScreenFlag && _autoPlay.value,
+      );
+    }
+    return null;
+  }
+
+  Future<void> playerInit({
+    String? video,
+    String? audio,
+    Duration? seekToTime,
+    Duration? duration,
+    bool? autoplay,
+    Volume? volume,
+    bool autoFullScreenFlag = false,
+  }) async {
+    Duration? seek = seekToTime ?? defaultST ?? playedTime;
+    if (seek == null || seek == Duration.zero) {
+      seek = getFirstSegment();
+    }
+    await plPlayerController.setDataSource(
+      isFileSource
+          ? FileSource(
+              dir: args['dirPath'],
+              typeTag: entry.typeTag!,
+              isMp4: entry.mediaType == 1,
+              hasDashAudio: entry.hasDashAudio,
+            )
+          : NetworkSource(
+              videoSource: video ?? videoUrl!,
+              audioSource: audio ?? audioUrl,
+            ),
+      seekTo: seek,
+      duration:
+          duration ??
+          (data.timeLength == null
+              ? null
+              : Duration(milliseconds: data.timeLength!)),
+      isVertical: isVertical.value,
+      aid: aid,
+      bvid: bvid,
+      cid: cid.value,
+      autoplay: autoplay ?? _autoPlay.value,
+      epid: isUgc ? null : epId,
+      seasonId: isUgc ? null : seasonId,
+      pgcType: isUgc ? null : pgcType,
+      videoType: videoType,
+      onInit: () {
+        videoState.value = true;
+        setSubtitle(vttSubtitlesIndex.value);
+        saveLastVideoInfo();
+      },
+      width: firstVideo.width,
+      height: firstVideo.height,
+      volume: volume ?? this.volume,
+      autoFullScreenFlag: autoFullScreenFlag,
+    );
+
+    if (isClosed) return;
+
+    if (!isFileSource) {
+      if (plPlayerController.enableBlock) {
+        initSkip();
+      }
+
+      if (vttSubtitlesIndex.value == -1) {
+        _queryPlayInfo();
+      }
+
+      if (plPlayerController.showDmChart && dmTrend.value == null) {
+        _getDmTrend();
+      }
+    }
+
+    defaultST = null;
+  }
+
+  bool isQuerying = false;
+
+  final Rx<List<LanguageItem>?> languages = Rx<List<LanguageItem>?>(null);
+  final Rx<String?> currLang = Rx<String?>(null);
+  void setLanguage(String language) {
+    if (currLang.value == language) return;
+    if (!isLoginVideo) {
+      SmartDialog.showToast('账号未登录');
+      return;
+    }
+    currLang.value = language;
+    queryVideoUrl(defaultST: playedTime);
+  }
+
+  Volume? volume;
+
+  // 视频链接
+  Future<void> queryVideoUrl({
+    Duration? defaultST,
+    bool fromReset = false,
+    bool autoFullScreenFlag = false,
+  }) async {
+    if (isFileSource) {
+      return _initPlayerIfNeeded(autoFullScreenFlag);
+    }
+    if (isQuerying) {
+      return;
+    }
+    isQuerying = true;
+    if (plPlayerController.enableSponsorBlock && isBlock && !fromReset) {
+      querySponsorBlock(bvid: bvid, cid: cid.value);
+    }
+    if (plPlayerController.cacheVideoQa == null) {
+      final isWiFi = await Utils.isWiFi;
+      plPlayerController
+        ..cacheVideoQa = isWiFi
+            ? Pref.defaultVideoQa
+            : Pref.defaultVideoQaCellular
+        ..cacheAudioQa = isWiFi
+            ? Pref.defaultAudioQa
+            : Pref.defaultAudioQaCellular;
+    }
+
+    final result = await VideoHttp.videoUrl(
+      cid: cid.value,
+      bvid: bvid,
+      epid: epId,
+      seasonId: seasonId,
+      tryLook: plPlayerController.tryLook,
+      videoType: _actualVideoType ?? videoType,
+      language: currLang.value,
+    );
+
+    if (result case Success(:final response)) {
+      data = response;
+
+      languages.value = data.language?.items;
+      currLang.value = data.curLanguage;
+
+      volume = data.volume;
+
+      final progress = args.remove('progress');
+      if (progress != null) {
+        this.defaultST = Duration(milliseconds: progress);
+      } else if (defaultST == null && data.lastPlayTime != null) {
+        this.defaultST = Duration(milliseconds: data.lastPlayTime!);
+      }
+
+      if (!isUgc && !fromReset && plPlayerController.enablePgcSkip) {
+        if (data.clipInfoList case final clipInfoList?) {
+          resetBlock();
+          handleSBData(clipInfoList);
+        }
+      }
+
+      if (data.acceptDesc?.contains('试看') == true) {
+        SmartDialog.showToast(
+          '该视频为专属视频，仅提供试看',
+          displayTime: const Duration(seconds: 3),
+        );
+      }
+      if (data.dash == null && data.durl != null) {
+        final first = data.durl!.first;
+        videoUrl = VideoUtils.getCdnUrl(first.playUrls);
+        audioUrl = '';
+
+        // 实际为FLV/MP4格式，但已被淘汰，这里仅做兜底处理
+        final videoQuality = VideoQuality.fromCode(data.quality!);
+        firstVideo = VideoItem(
+          id: data.quality!,
+          baseUrl: videoUrl,
+          codecs: 'avc1',
+          quality: videoQuality,
+        );
+        setVideoHeight();
+        currentDecodeFormats = VideoDecodeFormatType.fromString('avc1');
+        currentVideoQa.value = videoQuality;
+        await _initPlayerIfNeeded(autoFullScreenFlag);
+        isQuerying = false;
+        return;
+      }
+      if (data.dash == null) {
+        SmartDialog.showToast('视频资源不存在');
+        _autoPlay.value = false;
+        videoState.value = false;
+        if (plPlayerController.isFullScreen.value) {
+          plPlayerController.toggleFullScreen(false);
+        }
+        isQuerying = false;
+        return;
+      }
+      final List<VideoItem> videoList = data.dash!.video!;
+      // if (kDebugMode) debugPrint("allVideosList:${allVideosList}");
+      // 当前可播放的最高质量视频
+      final curHighestVideoQa = videoList.first.quality.code;
+      // 预设的画质为null，则当前可用的最高质量
+      int targetVideoQa = curHighestVideoQa;
+      if (data.acceptQuality?.isNotEmpty == true &&
+          plPlayerController.cacheVideoQa! <= curHighestVideoQa) {
+        // 如果预设的画质低于当前最高
+        targetVideoQa = data.acceptQuality!.findClosestTarget(
+          (e) => e <= plPlayerController.cacheVideoQa!,
+          (a, b) => a > b ? a : b,
+        );
+      }
+      currentVideoQa.value = VideoQuality.fromCode(targetVideoQa);
+
+      /// 取出符合当前画质的videoList
+      final List<VideoItem> videosList = videoList
+          .where((e) => e.quality.code == targetVideoQa)
+          .toList();
+
+      /// 优先顺序 设置中指定解码格式 -> 当前可选的首个解码格式
+      final List<FormatItem> supportFormats = data.supportFormats!;
+      // 根据画质选编码格式
+      final List<String> supportDecodeFormats = supportFormats
+          .firstWhere(
+            (e) => e.quality == targetVideoQa,
+            orElse: () => supportFormats.first,
+          )
+          .codecs!;
+      // 默认从设置中取AV1
+      currentDecodeFormats = VideoDecodeFormatType.fromString(cacheDecode);
+      VideoDecodeFormatType secondDecodeFormats =
+          VideoDecodeFormatType.fromString(cacheSecondDecode);
+      // 当前视频没有对应格式返回第一个
+      int flag = 0;
+      for (final e in supportDecodeFormats) {
+        if (currentDecodeFormats.codes.any(e.startsWith)) {
+          flag = 1;
+          break;
+        } else if (secondDecodeFormats.codes.any(e.startsWith)) {
+          flag = 2;
+        }
+      }
+      if (flag == 2) {
+        currentDecodeFormats = secondDecodeFormats;
+      } else if (flag == 0) {
+        currentDecodeFormats = VideoDecodeFormatType.fromString(
+          supportDecodeFormats.first,
+        );
+      }
+
+      /// 取出符合当前解码格式的videoItem
+      firstVideo = videosList.firstWhere(
+        (e) => currentDecodeFormats.codes.any(e.codecs!.startsWith),
+        orElse: () => videosList.first,
+      );
+      setVideoHeight();
+
+      videoUrl = VideoUtils.getCdnUrl(firstVideo.playUrls);
+
+      /// 优先顺序 设置中指定质量 -> 当前可选的最高质量
+      AudioItem? firstAudio;
+      final audioList = data.dash?.audio;
+      if (audioList != null && audioList.isNotEmpty) {
+        final List<int> audioIds = audioList.map((map) => map.id!).toList();
+        int closestNumber = audioIds.findClosestTarget(
+          (e) => e <= plPlayerController.cacheAudioQa,
+          (a, b) => a > b ? a : b,
+        );
+        if (!audioIds.contains(plPlayerController.cacheAudioQa) &&
+            audioIds.any((e) => e > plPlayerController.cacheAudioQa)) {
+          closestNumber = AudioQuality.k192.code;
+        }
+        firstAudio = audioList.firstWhere(
+          (e) => e.id == closestNumber,
+          orElse: () => audioList.first,
+        );
+        audioUrl = VideoUtils.getCdnUrl(firstAudio.playUrls, isAudio: true);
+        if (firstAudio.id case final int id?) {
+          currentAudioQa = AudioQuality.fromCode(id);
+        }
+      } else {
+        audioUrl = '';
+      }
+      await _initPlayerIfNeeded(autoFullScreenFlag);
+    } else {
+      _autoPlay.value = false;
+      videoState.value = false;
+      if (plPlayerController.isFullScreen.value) {
+        plPlayerController.toggleFullScreen(false);
+      }
+    }
+    isQuerying = false;
+  }
+
+  late final List<PostSegmentModel> postList = <PostSegmentModel>[];
+  void onBlock(BuildContext context) {
+    if (postList.isEmpty) {
+      postList.add(
+        PostSegmentModel(
+          segment: Pair(
+            first: 0,
+            second: plPlayerController.position.inMilliseconds / 1000,
+          ),
+          category: SegmentType.sponsor,
+          actionType: ActionType.skip,
+        ),
+      );
+    }
+    if (plPlayerController.isFullScreen.value || showVideoSheet) {
+      PageUtils.showVideoBottomSheet(
+        context,
+        child: plPlayerController.darkVideoPage && MyApp.darkThemeData != null
+            ? Theme(
+                data: MyApp.darkThemeData!,
+                child: PostPanel(
+                  enableSlide: false,
+                  videoDetailController: this,
+                  plPlayerController: plPlayerController,
+                ),
+              )
+            : PostPanel(
+                enableSlide: false,
+                videoDetailController: this,
+                plPlayerController: plPlayerController,
+              ),
+        isFullScreen: () => plPlayerController.isFullScreen.value,
+      );
+    } else {
+      childKey.currentState?.showBottomSheet(
+        backgroundColor: Colors.transparent,
+        constraints: const BoxConstraints(),
+        (context) => PostPanel(
+          videoDetailController: this,
+          plPlayerController: plPlayerController,
+        ),
+      );
+    }
+  }
+
+  RxList<Subtitle> subtitles = RxList<Subtitle>();
+  final Map<int, ({bool isData, String id})> vttSubtitles = {};
+  late final RxInt vttSubtitlesIndex = (-1).obs;
+  late final RxBool showVP = true.obs;
+  late final RxList<ViewPointSegment> viewPointList = <ViewPointSegment>[].obs;
+
+  // 设定字幕轨道
+  Future<void> setSubtitle(int index) async {
+    if (index <= 0) {
+      await plPlayerController.videoPlayerController?.setSubtitleTrack(
+        SubtitleTrack.no(),
+      );
+      vttSubtitlesIndex.value = index;
+      return;
+    }
+
+    Future<void> setSub(({bool isData, String id}) subtitle) async {
+      final sub = subtitles[index - 1];
+
+      String subUri = subtitle.id;
+      File? file;
+      if (subtitle.isData) {
+        subUri = path.join(tmpDirPath, '${cid.value}-${sub.lan}.vtt');
+        file = File(subUri);
+        if (!file.existsSync()) {
+          await file.writeAsString(subtitle.id);
+          if (plPlayerController.videoPlayerController?.disposed == false) {
+            plPlayerController.videoPlayerController!.release.add(file.tryDel);
+          } else {
+            file.tryDel();
+            return;
+          }
+        }
+      }
+      await plPlayerController.videoPlayerController?.setSubtitleTrack(
+        SubtitleTrack(subUri, sub.lanDoc, sub.lan, uri: true),
+      );
+      vttSubtitlesIndex.value = index;
+    }
+
+    ({bool isData, String id})? subtitle = vttSubtitles[index - 1];
+    if (subtitle != null) {
+      await setSub(subtitle);
+    } else {
+      final result = await VideoHttp.vttSubtitles(
+        subtitles[index - 1].subtitleUrl!,
+      );
+      if (!isClosed && result != null) {
+        final subtitle = (isData: true, id: result);
+        vttSubtitles[index - 1] = subtitle;
+        await setSub(subtitle);
+      }
+    }
+  }
+
+  // interactive video
+  int? graphVersion;
+  EdgeInfoData? steinEdgeInfo;
+  late final RxBool showSteinEdgeInfo = false.obs;
+
+  Future<void> getSteinEdgeInfo([int? edgeId]) async {
+    steinEdgeInfo = null;
+    try {
+      final res = await Request().get(
+        '/x/stein/edgeinfo_v2',
+        queryParameters: {
+          'bvid': bvid,
+          'graph_version': graphVersion,
+          'edge_id': ?edgeId,
+        },
+      );
+      if (res.data['code'] == 0) {
+        steinEdgeInfo = EdgeInfoData.fromJson(res.data['data']);
+      } else {
+        if (kDebugMode) {
+          debugPrint('getSteinEdgeInfo error: ${res.data['message']}');
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('getSteinEdgeInfo: $e');
+    }
+  }
+
+  late bool continuePlayingPart = Pref.continuePlayingPart;
+
+  Future<void> _queryPlayInfo() async {
+    vttSubtitles.clear();
+    vttSubtitlesIndex.value = 0;
+    if (plPlayerController.showViewPoints) {
+      viewPointList.clear();
+    }
+    final res = await VideoHttp.playInfo(
+      bvid: bvid,
+      cid: cid.value,
+      seasonId: seasonId,
+      epId: epId,
+    );
+    if (res case Success(:final response)) {
+      // interactive video
+      if (isUgc && graphVersion == null) {
+        try {
+          final introCtr = Get.find<UgcIntroController>(tag: heroTag);
+          if (introCtr.videoDetail.value.rights?.isSteinGate == 1) {
+            graphVersion = response.interaction?.graphVersion;
+            getSteinEdgeInfo();
+          }
+        } catch (e) {
+          if (kDebugMode) debugPrint('handle stein: $e');
+        }
+      }
+
+      if (isUgc && continuePlayingPart) {
+        continuePlayingPart = false;
+        try {
+          UgcIntroController ugcIntroController = Get.find<UgcIntroController>(
+            tag: heroTag,
+          );
+          if ((ugcIntroController.videoDetail.value.pages?.length ?? 0) > 1 &&
+              response.lastPlayCid != null &&
+              response.lastPlayCid != 0) {
+            if (response.lastPlayCid != cid.value) {
+              int index = ugcIntroController.videoDetail.value.pages!
+                  .indexWhere((item) => item.cid == response.lastPlayCid);
+              if (index != -1) {
+                onAddItem(index);
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (plPlayerController.showViewPoints &&
+          response.viewPoints?.firstOrNull?.type == 2) {
+        try {
+          viewPointList.value = response.viewPoints!.map((item) {
+            final end = (item.to! / (data.timeLength! / 1000)).clamp(0.0, 1.0);
+            return ViewPointSegment(
+              end: end,
+              title: item.content,
+              url: item.imgUrl,
+              from: item.from,
+              to: item.to,
+            );
+          }).toList();
+        } catch (_) {}
+      }
+
+      if (response.subtitle?.subtitles?.isNotEmpty == true) {
+        subtitles.value = response.subtitle!.subtitles!;
+
+        final idx = switch (Pref.subtitlePreferenceV2) {
+          SubtitlePrefType.off => 0,
+          SubtitlePrefType.on => 1,
+          SubtitlePrefType.withoutAi =>
+            subtitles.first.lan.startsWith('ai') ? 0 : 1,
+          SubtitlePrefType.auto =>
+            !subtitles.first.lan.startsWith('ai') ||
+                    (PlatformUtils.isMobile &&
+                        (await FlutterVolumeController.getVolume() ?? 0.0) <=
+                            0.0)
+                ? 1
+                : 0,
+        };
+        await setSubtitle(idx);
+      }
+    }
+  }
+
+  void updateMediaListHistory(int aid) {
+    if (args['sortField'] != null) {
+      VideoHttp.medialistHistory(
+        desc: _mediaDesc ? 1 : 0,
+        oid: aid,
+        upperMid: args['mediaId'],
+      );
+    }
+  }
+
+  void makeHeartBeat() {
+    if (plPlayerController.enableHeart &&
+        !plPlayerController.playerStatus.isCompleted &&
+        playedTime != null) {
+      try {
+        plPlayerController.makeHeartBeat(
+          data.timeLength != null
+              ? (data.timeLength! - playedTime!.inMilliseconds).abs() <= 1000
+                    ? -1
+                    : playedTime!.inSeconds
+              : playedTime!.inSeconds,
+          type: HeartBeatType.completed,
+          isManual: true,
+          aid: aid,
+          bvid: bvid,
+          cid: cid.value,
+          epid: isUgc ? null : epId,
+          seasonId: isUgc ? null : seasonId,
+          pgcType: isUgc ? null : pgcType,
+          videoType: videoType,
+        );
+      } catch (_) {}
+    }
+  }
+
+
+
+  @override
+  void onClose() {
+    cid.close();
+    if (isFileSource) {
+      cacheLocalProgress();
+    }
+    introScrollCtr?.dispose();
+    introScrollCtr = null;
+    tabCtr.dispose();
+    _scrollCtr
+      ?..removeListener(scrollListener)
+      ..dispose();
+    animController?.dispose();
+    subtitles.clear();
+    vttSubtitles.clear();
+    super.onClose();
+  }
+
+  void onReset({bool isStein = false}) {
+    if (isFileSource) {
+      cacheLocalProgress();
+    }
+
+    playedTime = null;
+    defaultST = null;
+    videoUrl = null;
+    audioUrl = null;
+
+    if (scrollRatio.value != 0) {
+      scrollRatio.refresh();
+    }
+
+    // danmaku
+    savedDanmaku = null;
+
+    // subtitle
+    subtitles.clear();
+    vttSubtitlesIndex.value = -1;
+    vttSubtitles.clear();
+
+    if (!isFileSource) {
+      // language
+      languages.value = null;
+      currLang.value = null;
+
+      // dm trend
+      if (plPlayerController.showDmChart) {
+        dmTrend.value = null;
+      }
+
+      // view point
+      if (plPlayerController.showViewPoints) {
+        viewPointList.clear();
+      }
+
+      // sponsor block
+      if (blockConfig.enableBlock) {
+        resetBlock();
+      }
+
+      // interactive video
+      if (!isStein) {
+        graphVersion = null;
+      }
+      steinEdgeInfo = null;
+      showSteinEdgeInfo.value = false;
+    }
+  }
+
+  late final Rx<LoadingState<List<double>>?> dmTrend =
+      Rx<LoadingState<List<double>>?>(null);
+  late final RxBool showDmTrendChart = true.obs;
+
+  Future<void> _getDmTrend() async {
+    dmTrend.value = LoadingState<List<double>>.loading();
+    try {
+      final res = await Request().get(
+        'https://bvc.bilivideo.com/pbp/data',
+        queryParameters: {
+          'bvid': bvid,
+          'cid': cid.value,
+        },
+      );
+      PbpData data = PbpData.fromJson(res.data);
+      int stepSec = data.stepSec ?? 0;
+      if (stepSec != 0 && data.events?.eDefault?.isNotEmpty == true) {
+        dmTrend.value = Success(data.events!.eDefault!);
+        return;
+      }
+      dmTrend.value = const Error(null);
+    } catch (e) {
+      dmTrend.value = const Error(null);
+      if (kDebugMode) debugPrint('_getDmTrend: $e');
+    }
+  }
+
+  void showNoteList(BuildContext context) {
+    String? title;
+    try {
+      title = Get.find<UgcIntroController>(
+        tag: heroTag,
+      ).videoDetail.value.title;
+    } catch (_) {}
+    if (plPlayerController.isFullScreen.value || showVideoSheet) {
+      PageUtils.showVideoBottomSheet(
+        context,
+        child: plPlayerController.darkVideoPage && MyApp.darkThemeData != null
+            ? Theme(
+                data: MyApp.darkThemeData!,
+                child: NoteListPage(
+                  oid: aid,
+                  enableSlide: false,
+                  heroTag: heroTag,
+                  isStein: graphVersion != null,
+                  title: title,
+                ),
+              )
+            : NoteListPage(
+                oid: aid,
+                enableSlide: false,
+                heroTag: heroTag,
+                isStein: graphVersion != null,
+                title: title,
+              ),
+        isFullScreen: () => plPlayerController.isFullScreen.value,
+      );
+    } else {
+      childKey.currentState?.showBottomSheet(
+        backgroundColor: Colors.transparent,
+        constraints: const BoxConstraints(),
+        (context) => NoteListPage(
+          oid: aid,
+          heroTag: heroTag,
+          isStein: graphVersion != null,
+          title: title,
+        ),
+      );
+    }
+  }
+
+  @pragma('vm:notify-debugger-on-exception')
+  bool onSkipSegment() {
+    try {
+      if (plPlayerController.enableBlock) {
+        if (listData.lastOrNull case final SegmentModel item) {
+          onSkip(item, isSeek: false);
+          onRemoveItem(listData.indexOf(item), item);
+          return true;
+        }
+      }
+    } catch (e, s) {
+      Utils.reportError(e, s);
+    }
+    return false;
+  }
+
+  void toAudioPage() {
+    int? id;
+    int? extraId;
+    PlaylistSource from = PlaylistSource.UP_ARCHIVE;
+    if (isPlayAll) {
+      id = args['mediaId'];
+      extraId = sourceType.extraId;
+      from = sourceType.playlistSource!;
+    } else if (isUgc) {
+      try {
+        final ctr = Get.find<UgcIntroController>(tag: heroTag);
+        id = ctr.videoDetail.value.ugcSeason?.id;
+        if (id != null) {
+          extraId = 8;
+          from = PlaylistSource.MEDIA_LIST;
+        }
+      } catch (_) {}
+    }
+    AudioPage.toAudioPage(
+      itemType: 1,
+      id: id,
+      oid: aid,
+      subId: [cid.value],
+      from: from,
+      heroTag: _autoPlay.value ? heroTag : null,
+      start: playedTime,
+      audioUrl: audioUrl,
+      extraId: extraId,
+    );
+  }
+
+  Future<void> onDownload(BuildContext context) async {
+    VideoDetailData? videoDetail;
+    List<ugc.BaseEpisodeItem>? episodes;
+    UgcIntroController? ugcIntroController;
+    PgcInfoModel? pgcItem;
+    if (isUgc) {
+      try {
+        ugcIntroController = Get.find<UgcIntroController>(tag: heroTag);
+        videoDetail = ugcIntroController.videoDetail.value;
+        if (videoDetail.ugcSeason?.sections case final sections?) {
+          episodes = <ugc.BaseEpisodeItem>[];
+          for (final i in sections) {
+            if (i.episodes case final e?) {
+              episodes.addAll(e);
+            }
+          }
+        } else {
+          episodes = videoDetail.pages;
+        }
+      } catch (e, s) {
+        if (kDebugMode) {
+          debugPrint('download ugc: $e\n\n$s');
+        }
+      }
+    } else {
+      try {
+        pgcItem = Get.find<PgcIntroController>(tag: heroTag).pgcItem;
+        episodes = pgcItem.episodes;
+      } catch (e, s) {
+        if (kDebugMode) {
+          debugPrint('download pgc: $e\n\n$s');
+        }
+      }
+    }
+    if (episodes != null && episodes.isNotEmpty) {
+      final downloadService = Get.find<DownloadService>();
+      await downloadService.waitForInitialization;
+      if (!context.mounted) {
+        return;
+      }
+      final Set<int> cidSet = downloadService.downloadList
+          .followedBy(downloadService.waitDownloadQueue)
+          .map((e) => e.cid)
+          .toSet();
+      final index = episodes.indexWhere(
+        (e) => e.cid == (seasonCid ?? cid.value),
+      );
+
+      showModalBottomSheet(
+        context: context,
+        useSafeArea: true,
+        isScrollControlled: true,
+        constraints: BoxConstraints(
+          maxWidth: min(640, context.mediaQueryShortestSide),
+        ),
+        builder: (context) {
+          final maxChildSize =
+              PlatformUtils.isMobile && !context.mediaQuerySize.isPortrait
+                  ? 1.0
+                  : 0.7;
+          return DraggableScrollableSheet(
+            snap: true,
+            expand: false,
+            minChildSize: 0,
+            snapSizes: [maxChildSize],
+            maxChildSize: maxChildSize,
+            initialChildSize: maxChildSize,
+            builder: (context, scrollController) => DownloadPanel(
+              index: index,
+              videoDetail: videoDetail,
+              pgcItem: pgcItem,
+              episodes: episodes!,
+              scrollController: scrollController,
+              videoDetailController: this,
+              heroTag: heroTag,
+              ugcIntroController: ugcIntroController,
+              cidSet: cidSet,
+            ),
+          );
+        },
+      );
+    }
+  }
+
+  void editPlayUrl() {
+    String videoUrl = this.videoUrl ?? '';
+    String audioUrl = this.audioUrl ?? '';
+    Widget textField({
+      required String label,
+      required String initialValue,
+      required ValueChanged<String> onChanged,
+    }) => TextFormField(
+      minLines: 1,
+      maxLines: 3,
+      initialValue: initialValue,
+      onChanged: onChanged,
+      decoration: InputDecoration(
+        labelText: label,
+        border: const OutlineInputBorder(),
+      ),
+    );
+
+    showDialog(
+      context: Get.context!,
+      builder: (context) => AlertDialog(
+        title: const Text('编辑播放地址'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            textField(
+              label: '视频地址',
+              initialValue: videoUrl,
+              onChanged: (value) => videoUrl = value,
+            ),
+            const SizedBox(height: 16),
+            textField(
+              label: '音频地址',
+              initialValue: audioUrl,
+              onChanged: (value) => audioUrl = value,
+            ),
+          ],
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () {
+              this.videoUrl = videoUrl;
+              this.audioUrl = audioUrl;
+              Navigator.of(context).pop();
+            },
+            child: const Text('保存'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 添加onCast方法
+  void onCast() {
+    // 实现投屏功能
+  }
+}
+2026-04-08T08:01:44.7458944Z Current runner version: '2.333.1'
+2026-04-08T08:01:44.7482922Z ##[group]Runner Image Provisioner
+2026-04-08T08:01:44.7483698Z Hosted Compute Agent
+2026-04-08T08:01:44.7484202Z Version: 20260213.493
+2026-04-08T08:01:44.7484842Z Commit: 5c115507f6dd24b8de37d8bbe0bb4509d0cc0fa3
+2026-04-08T08:01:44.7485486Z Build Date: 2026-02-13T00:28:41Z
+2026-04-08T08:01:44.7486070Z Worker ID: {3dc3d668-fef5-4c27-ba2e-7ef3b8cca4fb}
+2026-04-08T08:01:44.7486726Z Azure Region: westus3
+2026-04-08T08:01:44.7487187Z ##[endgroup]
+2026-04-08T08:01:44.7488833Z ##[group]Operating System
+2026-04-08T08:01:44.7489447Z Ubuntu
+2026-04-08T08:01:44.7490188Z 24.04.4
+2026-04-08T08:01:44.7490645Z LTS
+2026-04-08T08:01:44.7491062Z ##[endgroup]
+2026-04-08T08:01:44.7491548Z ##[group]Runner Image
+2026-04-08T08:01:44.7492030Z Image: ubuntu-24.04
+2026-04-08T08:01:44.7492551Z Version: 20260329.72.1
+2026-04-08T08:01:44.7493651Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260329.72/images/ubuntu/Ubuntu2404-Readme.md
+2026-04-08T08:01:44.7494932Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260329.72
+2026-04-08T08:01:44.7495685Z ##[endgroup]
+2026-04-08T08:01:44.7498115Z ##[group]GITHUB_TOKEN Permissions
+2026-04-08T08:01:44.7500722Z Actions: write
+2026-04-08T08:01:44.7501234Z ArtifactMetadata: write
+2026-04-08T08:01:44.7501687Z Attestations: write
+2026-04-08T08:01:44.7502221Z Checks: write
+2026-04-08T08:01:44.7502678Z Contents: write
+2026-04-08T08:01:44.7503388Z Deployments: write
+2026-04-08T08:01:44.7503931Z Discussions: write
+2026-04-08T08:01:44.7504372Z Issues: write
+2026-04-08T08:01:44.7504818Z Metadata: read
+2026-04-08T08:01:44.7505298Z Models: read
+2026-04-08T08:01:44.7505777Z Packages: write
+2026-04-08T08:01:44.7506250Z Pages: write
+2026-04-08T08:01:44.7506842Z PullRequests: write
+2026-04-08T08:01:44.7507337Z RepositoryProjects: write
+2026-04-08T08:01:44.7507827Z SecurityEvents: write
+2026-04-08T08:01:44.7508345Z Statuses: write
+2026-04-08T08:01:44.7508820Z ##[endgroup]
+2026-04-08T08:01:44.7511088Z Secret source: Actions
+2026-04-08T08:01:44.7511962Z Prepare workflow directory
+2026-04-08T08:01:44.7874002Z Prepare all required actions
+2026-04-08T08:01:44.7930290Z Getting action download info
+2026-04-08T08:01:45.3314607Z Download action repository 'actions/checkout@v6' (SHA:de0fac2e4500dabe0009e67214ff5f5447ce83dd)
+2026-04-08T08:01:45.4351551Z Download action repository 'actions/setup-java@v5' (SHA:be666c2fcd27ec809703dec50e508c2fdc7f6654)
+2026-04-08T08:01:46.5665264Z Download action repository 'subosito/flutter-action@v2' (SHA:1a449444c387b1966244ae4d4f8c696479add0b2)
+2026-04-08T08:01:47.2293533Z Download action repository 'softprops/action-gh-release@v2' (SHA:153bb8e04406b158c6c84fc1615b65b24149a1fe)
+2026-04-08T08:01:47.9752788Z Download action repository 'actions/upload-artifact@v7' (SHA:bbbca2ddaa5d8feaa63e36b76fdaad77386f024f)
+2026-04-08T08:01:48.1463282Z Getting action download info
+2026-04-08T08:01:48.3093063Z Download action repository 'actions/cache@v5' (SHA:668228422ae6a00e4ad889ee87cd7109ec5666a7)
+2026-04-08T08:01:48.4663146Z Complete job name: Release Android
+2026-04-08T08:01:48.5251238Z ##[group]Run actions/checkout@v6
+2026-04-08T08:01:48.5251753Z with:
+2026-04-08T08:01:48.5251964Z   fetch-depth: 0
+2026-04-08T08:01:48.5252187Z   repository: cddlsjy/PiliPlus
+2026-04-08T08:01:48.5252670Z   token: ***
+2026-04-08T08:01:48.5252949Z   ssh-strict: true
+2026-04-08T08:01:48.5253155Z   ssh-user: git
+2026-04-08T08:01:48.5253371Z   persist-credentials: true
+2026-04-08T08:01:48.5253595Z   clean: true
+2026-04-08T08:01:48.5253823Z   sparse-checkout-cone-mode: true
+2026-04-08T08:01:48.5254055Z   fetch-tags: false
+2026-04-08T08:01:48.5254249Z   show-progress: true
+2026-04-08T08:01:48.5254439Z   lfs: false
+2026-04-08T08:01:48.5254614Z   submodules: false
+2026-04-08T08:01:48.5254800Z   set-safe-directory: true
+2026-04-08T08:01:48.5255194Z ##[endgroup]
+2026-04-08T08:01:48.6158371Z Syncing repository: cddlsjy/PiliPlus
+2026-04-08T08:01:48.6159890Z ##[group]Getting Git version info
+2026-04-08T08:01:48.6160627Z Working directory is '/home/runner/work/PiliPlus/PiliPlus'
+2026-04-08T08:01:48.6161316Z [command]/usr/bin/git version
+2026-04-08T08:01:48.6179215Z git version 2.53.0
+2026-04-08T08:01:48.6200031Z ##[endgroup]
+2026-04-08T08:01:48.6213455Z Temporarily overriding HOME='/home/runner/work/_temp/53c07969-ed57-4e5a-88ed-0d59bbaeb95e' before making global git config changes
+2026-04-08T08:01:48.6214757Z Adding repository directory to the temporary git global config as a safe directory
+2026-04-08T08:01:48.6217996Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/PiliPlus/PiliPlus
+2026-04-08T08:01:48.6246844Z Deleting the contents of '/home/runner/work/PiliPlus/PiliPlus'
+2026-04-08T08:01:48.6250638Z ##[group]Initializing the repository
+2026-04-08T08:01:48.6254755Z [command]/usr/bin/git init /home/runner/work/PiliPlus/PiliPlus
+2026-04-08T08:01:48.6334168Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-04-08T08:01:48.6335000Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-04-08T08:01:48.6335792Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-04-08T08:01:48.6336183Z hint: call:
+2026-04-08T08:01:48.6336395Z hint:
+2026-04-08T08:01:48.6336805Z hint: 	git config --global init.defaultBranch <name>
+2026-04-08T08:01:48.6337246Z hint:
+2026-04-08T08:01:48.6337750Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-04-08T08:01:48.6338479Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-04-08T08:01:48.6339078Z hint:
+2026-04-08T08:01:48.6339372Z hint: 	git branch -m <name>
+2026-04-08T08:01:48.6339841Z hint:
+2026-04-08T08:01:48.6340328Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-04-08T08:01:48.6341208Z Initialized empty Git repository in /home/runner/work/PiliPlus/PiliPlus/.git/
+2026-04-08T08:01:48.6346523Z [command]/usr/bin/git remote add origin https://github.com/cddlsjy/PiliPlus
+2026-04-08T08:01:48.6372441Z ##[endgroup]
+2026-04-08T08:01:48.6372851Z ##[group]Disabling automatic garbage collection
+2026-04-08T08:01:48.6375854Z [command]/usr/bin/git config --local gc.auto 0
+2026-04-08T08:01:48.6397824Z ##[endgroup]
+2026-04-08T08:01:48.6398183Z ##[group]Setting up auth
+2026-04-08T08:01:48.6399061Z Removing SSH command configuration
+2026-04-08T08:01:48.6405159Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-04-08T08:01:48.6430535Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-04-08T08:01:48.6704812Z Removing HTTP extra header
+2026-04-08T08:01:48.6710760Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-04-08T08:01:48.6735403Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-04-08T08:01:48.6896114Z Removing includeIf entries pointing to credentials config files
+2026-04-08T08:01:48.6902265Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-04-08T08:01:48.6926695Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-04-08T08:01:48.7095167Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-6a3cafbe-f577-4898-a32d-17a31370c9a3.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-04-08T08:01:48.7125844Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/PiliPlus/PiliPlus/.git.path /home/runner/work/_temp/git-credentials-6a3cafbe-f577-4898-a32d-17a31370c9a3.config
+2026-04-08T08:01:48.7147390Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/PiliPlus/PiliPlus/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-6a3cafbe-f577-4898-a32d-17a31370c9a3.config
+2026-04-08T08:01:48.7173267Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-6a3cafbe-f577-4898-a32d-17a31370c9a3.config
+2026-04-08T08:01:48.7202031Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-6a3cafbe-f577-4898-a32d-17a31370c9a3.config
+2026-04-08T08:01:48.7223503Z ##[endgroup]
+2026-04-08T08:01:48.7224083Z ##[group]Fetching the repository
+2026-04-08T08:01:48.7236207Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules origin +refs/heads/*:refs/remotes/origin/* +refs/tags/*:refs/tags/*
+2026-04-08T08:01:52.2951242Z From https://github.com/cddlsjy/PiliPlus
+2026-04-08T08:01:52.2954099Z  * [new branch]          dev           -> origin/dev
+2026-04-08T08:01:52.2954838Z  * [new branch]          main          -> origin/main
+2026-04-08T08:01:52.2955523Z  * [new branch]          master        -> origin/master
+2026-04-08T08:01:52.2956204Z  * [new tag]             1.1.2         -> 1.1.2
+2026-04-08T08:01:52.2956787Z  * [new tag]             1.1.2.1       -> 1.1.2.1
+2026-04-08T08:01:52.2957376Z  * [new tag]             1.1.2.2       -> 1.1.2.2
+2026-04-08T08:01:52.2957954Z  * [new tag]             1.1.2.3       -> 1.1.2.3
+2026-04-08T08:01:52.2958533Z  * [new tag]             1.1.2.4       -> 1.1.2.4
+2026-04-08T08:01:52.2959141Z  * [new tag]             1.1.2.5       -> 1.1.2.5
+2026-04-08T08:01:52.2959886Z  * [new tag]             1.1.2.6       -> 1.1.2.6
+2026-04-08T08:01:52.2960497Z  * [new tag]             1.1.2.7       -> 1.1.2.7
+2026-04-08T08:01:52.2961082Z  * [new tag]             1.1.3         -> 1.1.3
+2026-04-08T08:01:52.2961660Z  * [new tag]             1.1.3.1       -> 1.1.3.1
+2026-04-08T08:01:52.2962509Z  * [new tag]             1.1.3.10      -> 1.1.3.10
+2026-04-08T08:01:52.2963146Z  * [new tag]             1.1.3.11      -> 1.1.3.11
+2026-04-08T08:01:52.2963731Z  * [new tag]             1.1.3.12      -> 1.1.3.12
+2026-04-08T08:01:52.2964359Z  * [new tag]             1.1.3.13      -> 1.1.3.13
+2026-04-08T08:01:52.2964942Z  * [new tag]             1.1.3.14      -> 1.1.3.14
+2026-04-08T08:01:52.2965432Z  * [new tag]             1.1.3.15      -> 1.1.3.15
+2026-04-08T08:01:52.2965921Z  * [new tag]             1.1.3.16      -> 1.1.3.16
+2026-04-08T08:01:52.2966399Z  * [new tag]             1.1.3.17      -> 1.1.3.17
+2026-04-08T08:01:52.2966889Z  * [new tag]             1.1.3.18      -> 1.1.3.18
+2026-04-08T08:01:52.2967348Z  * [new tag]             1.1.3.19      -> 1.1.3.19
+2026-04-08T08:01:52.2967734Z  * [new tag]             1.1.3.2       -> 1.1.3.2
+2026-04-08T08:01:52.2968132Z  * [new tag]             1.1.3.20      -> 1.1.3.20
+2026-04-08T08:01:52.2968531Z  * [new tag]             1.1.3.21      -> 1.1.3.21
+2026-04-08T08:01:52.2968947Z  * [new tag]             1.1.3.22      -> 1.1.3.22
+2026-04-08T08:01:52.2969383Z  * [new tag]             1.1.3.23      -> 1.1.3.23
+2026-04-08T08:01:52.2970164Z  * [new tag]             1.1.3.24      -> 1.1.3.24
+2026-04-08T08:01:52.2970975Z  * [new tag]             1.1.3.25      -> 1.1.3.25
+2026-04-08T08:01:52.2971480Z  * [new tag]             1.1.3.26      -> 1.1.3.26
+2026-04-08T08:01:52.2971960Z  * [new tag]             1.1.3.27      -> 1.1.3.27
+2026-04-08T08:01:52.2972443Z  * [new tag]             1.1.3.28      -> 1.1.3.28
+2026-04-08T08:01:52.2972920Z  * [new tag]             1.1.3.29      -> 1.1.3.29
+2026-04-08T08:01:52.2973404Z  * [new tag]             1.1.3.3       -> 1.1.3.3
+2026-04-08T08:01:52.2973875Z  * [new tag]             1.1.3.30      -> 1.1.3.30
+2026-04-08T08:01:52.2974391Z  * [new tag]             1.1.3.31      -> 1.1.3.31
+2026-04-08T08:01:52.2974904Z  * [new tag]             1.1.3.32      -> 1.1.3.32
+2026-04-08T08:01:52.2975397Z  * [new tag]             1.1.3.33      -> 1.1.3.33
+2026-04-08T08:01:52.2975891Z  * [new tag]             1.1.3.34      -> 1.1.3.34
+2026-04-08T08:01:52.2976375Z  * [new tag]             1.1.3.35      -> 1.1.3.35
+2026-04-08T08:01:52.2976994Z  * [new tag]             1.1.3.36      -> 1.1.3.36
+2026-04-08T08:01:52.2977479Z  * [new tag]             1.1.3.37      -> 1.1.3.37
+2026-04-08T08:01:52.2977979Z  * [new tag]             1.1.3.37-fix  -> 1.1.3.37-fix
+2026-04-08T08:01:52.2978501Z  * [new tag]             1.1.3.37-fix2 -> 1.1.3.37-fix2
+2026-04-08T08:01:52.2979002Z  * [new tag]             1.1.3.38      -> 1.1.3.38
+2026-04-08T08:01:52.2979489Z  * [new tag]             1.1.3.39      -> 1.1.3.39
+2026-04-08T08:01:52.2980131Z  * [new tag]             1.1.3.39-fix  -> 1.1.3.39-fix
+2026-04-08T08:01:52.2980650Z  * [new tag]             1.1.3.39-fix2 -> 1.1.3.39-fix2
+2026-04-08T08:01:52.2981141Z  * [new tag]             1.1.3.39-fix3 -> 1.1.3.39-fix3
+2026-04-08T08:01:52.2981631Z  * [new tag]             1.1.3.4       -> 1.1.3.4
+2026-04-08T08:01:52.2982130Z  * [new tag]             1.1.3.40      -> 1.1.3.40
+2026-04-08T08:01:52.2982621Z  * [new tag]             1.1.3.40-fix  -> 1.1.3.40-fix
+2026-04-08T08:01:52.2983113Z  * [new tag]             1.1.3.5       -> 1.1.3.5
+2026-04-08T08:01:52.2983602Z  * [new tag]             1.1.3.6       -> 1.1.3.6
+2026-04-08T08:01:52.2984092Z  * [new tag]             1.1.3.7       -> 1.1.3.7
+2026-04-08T08:01:52.2984556Z  * [new tag]             1.1.3.8       -> 1.1.3.8
+2026-04-08T08:01:52.2985031Z  * [new tag]             1.1.3.9       -> 1.1.3.9
+2026-04-08T08:01:52.2985507Z  * [new tag]             1.1.4         -> 1.1.4
+2026-04-08T08:01:52.2986004Z  * [new tag]             1.1.4-pre     -> 1.1.4-pre
+2026-04-08T08:01:52.2986534Z  * [new tag]             1.1.4-pre2    -> 1.1.4-pre2
+2026-04-08T08:01:52.2987043Z  * [new tag]             1.1.4-pre3    -> 1.1.4-pre3
+2026-04-08T08:01:52.2987565Z  * [new tag]             1.1.4-pre4    -> 1.1.4-pre4
+2026-04-08T08:01:52.2988068Z  * [new tag]             1.1.4-pre5    -> 1.1.4-pre5
+2026-04-08T08:01:52.2988604Z  * [new tag]             1.1.4-pre6    -> 1.1.4-pre6
+2026-04-08T08:01:52.2989174Z  * [new tag]             1.1.4.1       -> 1.1.4.1
+2026-04-08T08:01:52.2989799Z  * [new tag]             1.1.4.10      -> 1.1.4.10
+2026-04-08T08:01:52.2990295Z  * [new tag]             1.1.4.11      -> 1.1.4.11
+2026-04-08T08:01:52.2990777Z  * [new tag]             1.1.4.12      -> 1.1.4.12
+2026-04-08T08:01:52.2991273Z  * [new tag]             1.1.4.13      -> 1.1.4.13
+2026-04-08T08:01:52.2991764Z  * [new tag]             1.1.4.14      -> 1.1.4.14
+2026-04-08T08:01:52.2992236Z  * [new tag]             1.1.4.15      -> 1.1.4.15
+2026-04-08T08:01:52.2992722Z  * [new tag]             1.1.4.16      -> 1.1.4.16
+2026-04-08T08:01:52.2993203Z  * [new tag]             1.1.4.17      -> 1.1.4.17
+2026-04-08T08:01:52.2993696Z  * [new tag]             1.1.4.2       -> 1.1.4.2
+2026-04-08T08:01:52.2994165Z  * [new tag]             1.1.4.3       -> 1.1.4.3
+2026-04-08T08:01:52.2994662Z  * [new tag]             1.1.4.4       -> 1.1.4.4
+2026-04-08T08:01:52.2995158Z  * [new tag]             1.1.4.5       -> 1.1.4.5
+2026-04-08T08:01:52.2995642Z  * [new tag]             1.1.4.6       -> 1.1.4.6
+2026-04-08T08:01:52.2996157Z  * [new tag]             1.1.4.7       -> 1.1.4.7
+2026-04-08T08:01:52.2996759Z  * [new tag]             1.1.4.8       -> 1.1.4.8
+2026-04-08T08:01:52.2997273Z  * [new tag]             1.1.5         -> 1.1.5
+2026-04-08T08:01:52.2997761Z  * [new tag]             1.1.5-pre     -> 1.1.5-pre
+2026-04-08T08:01:52.2998279Z  * [new tag]             1.1.5-pre2    -> 1.1.5-pre2
+2026-04-08T08:01:52.2998791Z  * [new tag]             1.1.5-pre3    -> 1.1.5-pre3
+2026-04-08T08:01:52.2999304Z  * [new tag]             1.1.5-pre4    -> 1.1.5-pre4
+2026-04-08T08:01:52.2999972Z  * [new tag]             1.1.5-pre5    -> 1.1.5-pre5
+2026-04-08T08:01:52.3000476Z  * [new tag]             1.1.5-pre6    -> 1.1.5-pre6
+2026-04-08T08:01:52.3000985Z  * [new tag]             1.1.5-pre7    -> 1.1.5-pre7
+2026-04-08T08:01:52.3001497Z  * [new tag]             1.1.5-pre8    -> 1.1.5-pre8
+2026-04-08T08:01:52.3002012Z  * [new tag]             1.1.5.1       -> 1.1.5.1
+2026-04-08T08:01:52.3002494Z  * [new tag]             1.1.5.2       -> 1.1.5.2
+2026-04-08T08:01:52.3003101Z  * [new tag]             1.1.5.3       -> 1.1.5.3
+2026-04-08T08:01:52.3003592Z  * [new tag]             1.1.5.4       -> 1.1.5.4
+2026-04-08T08:01:52.3004149Z  * [new tag]             1.1.5.5       -> 1.1.5.5
+2026-04-08T08:01:52.3004604Z  * [new tag]             1.1.5.6       -> 1.1.5.6
+2026-04-08T08:01:52.3005041Z  * [new tag]             1.1.5.7       -> 1.1.5.7
+2026-04-08T08:01:52.3005475Z  * [new tag]             1.1.6         -> 1.1.6
+2026-04-08T08:01:52.3005930Z  * [new tag]             2.0.0         -> 2.0.0
+2026-04-08T08:01:52.3006317Z  * [new tag]             2.0.0.1       -> 2.0.0.1
+2026-04-08T08:01:52.3006741Z  * [new tag]             2.0.1         -> 2.0.1
+2026-04-08T08:01:52.3007153Z  * [new tag]             2.0.1.1       -> 2.0.1.1
+2026-04-08T08:01:52.3007598Z  * [new tag]             release1      -> release1
+2026-04-08T08:01:52.3008076Z  * [new tag]             release10     -> release10
+2026-04-08T08:01:52.3008533Z  * [new tag]             release11     -> release11
+2026-04-08T08:01:52.3009050Z  * [new tag]             release12     -> release12
+2026-04-08T08:01:52.3009577Z  * [new tag]             release13     -> release13
+2026-04-08T08:01:52.3010274Z  * [new tag]             release14     -> release14
+2026-04-08T08:01:52.3010795Z  * [new tag]             release15     -> release15
+2026-04-08T08:01:52.3011321Z  * [new tag]             release16     -> release16
+2026-04-08T08:01:52.3011832Z  * [new tag]             release17     -> release17
+2026-04-08T08:01:52.3012349Z  * [new tag]             release18     -> release18
+2026-04-08T08:01:52.3012895Z  * [new tag]             release18-fix -> release18-fix
+2026-04-08T08:01:52.3013447Z  * [new tag]             release2      -> release2
+2026-04-08T08:01:52.3013961Z  * [new tag]             release3      -> release3
+2026-04-08T08:01:52.3014487Z  * [new tag]             release4      -> release4
+2026-04-08T08:01:52.3015013Z  * [new tag]             release5      -> release5
+2026-04-08T08:01:52.3015552Z  * [new tag]             release5-fix  -> release5-fix
+2026-04-08T08:01:52.3016121Z  * [new tag]             release6      -> release6
+2026-04-08T08:01:52.3016640Z  * [new tag]             release7      -> release7
+2026-04-08T08:01:52.3017157Z  * [new tag]             release8      -> release8
+2026-04-08T08:01:52.3017693Z  * [new tag]             release8-fix  -> release8-fix
+2026-04-08T08:01:52.3018233Z  * [new tag]             release9      -> release9
+2026-04-08T08:01:52.3062229Z [command]/usr/bin/git branch --list --remote origin/main
+2026-04-08T08:01:52.3088258Z   origin/main
+2026-04-08T08:01:52.3096724Z [command]/usr/bin/git rev-parse refs/remotes/origin/main
+2026-04-08T08:01:52.3116207Z a9628adf28159416749c56d62211173da2e2e241
+2026-04-08T08:01:52.3120377Z ##[endgroup]
+2026-04-08T08:01:52.3120945Z ##[group]Determining the checkout info
+2026-04-08T08:01:52.3121600Z ##[endgroup]
+2026-04-08T08:01:52.3126216Z [command]/usr/bin/git sparse-checkout disable
+2026-04-08T08:01:52.3159170Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-04-08T08:01:52.3184969Z ##[group]Checking out the ref
+2026-04-08T08:01:52.3186806Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2026-04-08T08:01:52.4632588Z Switched to a new branch 'main'
+2026-04-08T08:01:52.4633219Z branch 'main' set up to track 'origin/main'.
+2026-04-08T08:01:52.4660504Z ##[endgroup]
+2026-04-08T08:01:52.4694035Z [command]/usr/bin/git log -1 --format=%H
+2026-04-08T08:01:52.4716659Z a9628adf28159416749c56d62211173da2e2e241
+2026-04-08T08:01:52.4934364Z ##[group]Run actions/setup-java@v5
+2026-04-08T08:01:52.4934614Z with:
+2026-04-08T08:01:52.4934791Z   distribution: zulu
+2026-04-08T08:01:52.4934984Z   java-version: 17
+2026-04-08T08:01:52.4935154Z   cache: gradle
+2026-04-08T08:01:52.4935477Z   cache-dependency-path: android/*.gradle*
+android/**/gradle-wrapper.properties
+
+2026-04-08T08:01:52.4935851Z   java-package: jdk
+2026-04-08T08:01:52.4936032Z   check-latest: false
+2026-04-08T08:01:52.4936212Z   server-id: github
+2026-04-08T08:01:52.4936571Z   server-username: GITHUB_ACTOR
+2026-04-08T08:01:52.4936798Z   server-password: GITHUB_TOKEN
+2026-04-08T08:01:52.4937023Z   overwrite-settings: true
+2026-04-08T08:01:52.4937234Z   job-status: success
+2026-04-08T08:01:52.4937559Z   token: ***
+2026-04-08T08:01:52.4937738Z ##[endgroup]
+2026-04-08T08:01:52.6395007Z ##[group]Installed distributions
+2026-04-08T08:01:52.6419800Z Trying to resolve the latest version from remote
+2026-04-08T08:01:52.7360053Z Resolved latest version as 17.0.18+8
+2026-04-08T08:01:52.7360572Z Trying to download...
+2026-04-08T08:01:52.7361076Z Downloading Java 17.0.18+8 (Zulu) from https://cdn.azul.com/zulu/bin/zulu17.64.17-ca-crac-jdk17.0.18-linux_x64.tar.gz ...
+2026-04-08T08:01:54.4687252Z Extracting Java archive...
+2026-04-08T08:01:54.4778586Z [command]/usr/bin/tar xz --warning=no-unknown-keyword --overwrite -C /home/runner/work/_temp/a4e9dfff-52b8-487a-bddd-eec960102341 -f /home/runner/work/_temp/19ed981e-f054-445e-9baa-0ad420f485b4
+2026-04-08T08:01:57.0781519Z Java 17.0.18+8 was downloaded
+2026-04-08T08:01:57.0782035Z Setting Java 17.0.18+8 as the default
+2026-04-08T08:01:57.0790666Z Creating toolchains.xml for JDK version 17 from zulu
+2026-04-08T08:01:57.0857570Z Writing to /home/runner/.m2/toolchains.xml
+2026-04-08T08:01:57.0858101Z 
+2026-04-08T08:01:57.0858403Z Java configuration:
+2026-04-08T08:01:57.0858705Z   Distribution: zulu
+2026-04-08T08:01:57.0859017Z   Version: 17.0.18+8
+2026-04-08T08:01:57.0859423Z   Path: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:01:57.0860033Z 
+2026-04-08T08:01:57.0860543Z ##[endgroup]
+2026-04-08T08:01:57.0882625Z Creating settings.xml with server-id: github
+2026-04-08T08:01:57.0883247Z Writing to /home/runner/.m2/settings.xml
+2026-04-08T08:01:57.4536344Z Cache hit for: setup-java-Linux-x64-gradle-97a443671dbd1dec5556448e69dc88a0c2cb6ff01c61710f6edcb748265eecc5
+2026-04-08T08:01:58.7091002Z Received 25165824 of 3497902883 (0.7%), 24.0 MBs/sec
+2026-04-08T08:01:59.7069547Z Received 155189248 of 3497902883 (4.4%), 74.0 MBs/sec
+2026-04-08T08:02:00.7066962Z Received 264241152 of 3497902883 (7.6%), 84.0 MBs/sec
+2026-04-08T08:02:01.7066783Z Received 394264576 of 3497902883 (11.3%), 94.0 MBs/sec
+2026-04-08T08:02:02.7220855Z Received 536870912 of 3497902883 (15.3%), 102.1 MBs/sec
+2026-04-08T08:02:03.7210164Z Received 683671552 of 3497902883 (19.5%), 108.4 MBs/sec
+2026-04-08T08:02:04.7231270Z Received 855638016 of 3497902883 (24.5%), 116.3 MBs/sec
+2026-04-08T08:02:05.7297059Z Received 1019215872 of 3497902883 (29.1%), 121.2 MBs/sec
+2026-04-08T08:02:06.7301183Z Received 1182793728 of 3497902883 (33.8%), 125.0 MBs/sec
+2026-04-08T08:02:07.7300453Z Received 1337982976 of 3497902883 (38.3%), 127.3 MBs/sec
+2026-04-08T08:02:08.7330588Z Received 1480589312 of 3497902883 (42.3%), 128.1 MBs/sec
+2026-04-08T08:02:09.7331685Z Received 1623195648 of 3497902883 (46.4%), 128.7 MBs/sec
+2026-04-08T08:02:10.7346801Z Received 1778384896 of 3497902883 (50.8%), 130.2 MBs/sec
+2026-04-08T08:02:11.7356578Z Received 1958739968 of 3497902883 (56.0%), 133.2 MBs/sec
+2026-04-08T08:02:12.7364352Z Received 2004877312 of 3497902883 (57.3%), 127.2 MBs/sec
+2026-04-08T08:02:13.7375183Z Received 2004877312 of 3497902883 (57.3%), 119.3 MBs/sec
+2026-04-08T08:02:14.7378141Z Received 2004877312 of 3497902883 (57.3%), 112.3 MBs/sec
+2026-04-08T08:02:15.7382131Z Received 2009071616 of 3497902883 (57.4%), 106.3 MBs/sec
+2026-04-08T08:02:16.7382022Z Received 2009071616 of 3497902883 (57.4%), 100.7 MBs/sec
+2026-04-08T08:02:17.7385612Z Received 2009071616 of 3497902883 (57.4%), 95.6 MBs/sec
+2026-04-08T08:02:18.7382699Z Received 2088763392 of 3497902883 (59.7%), 94.7 MBs/sec
+2026-04-08T08:02:19.7385001Z Received 2139095040 of 3497902883 (61.2%), 92.6 MBs/sec
+2026-04-08T08:02:20.7385159Z Received 2147483648 of 3497902883 (61.4%), 88.9 MBs/sec
+2026-04-08T08:02:21.7468595Z Received 2273312768 of 3497902883 (65.0%), 90.2 MBs/sec
+2026-04-08T08:02:22.7441327Z Received 2390753280 of 3497902883 (68.3%), 91.1 MBs/sec
+2026-04-08T08:02:23.7676321Z Received 2550136832 of 3497902883 (72.9%), 93.3 MBs/sec
+2026-04-08T08:02:24.7688644Z Received 2675965952 of 3497902883 (76.5%), 94.3 MBs/sec
+2026-04-08T08:02:25.7761181Z Received 2805989376 of 3497902883 (80.2%), 95.3 MBs/sec
+2026-04-08T08:02:26.7770892Z Received 2915041280 of 3497902883 (83.3%), 95.6 MBs/sec
+2026-04-08T08:02:27.7749788Z Received 2948595712 of 3497902883 (84.3%), 93.5 MBs/sec
+2026-04-08T08:02:28.7754696Z Received 3053453312 of 3497902883 (87.3%), 93.7 MBs/sec
+2026-04-08T08:02:29.7821021Z Received 3191865344 of 3497902883 (91.3%), 94.9 MBs/sec
+2026-04-08T08:02:30.7771238Z Received 3321888768 of 3497902883 (95.0%), 95.8 MBs/sec
+2026-04-08T08:02:31.7831182Z Received 3409969152 of 3497902883 (97.5%), 95.4 MBs/sec
+2026-04-08T08:02:32.4716049Z Received 3497902883 of 3497902883 (100.0%), 96.0 MBs/sec
+2026-04-08T08:02:32.4717007Z Cache Size: ~3336 MB (3497902883 B)
+2026-04-08T08:02:32.4838432Z [command]/usr/bin/tar -xf /home/runner/work/_temp/5b231600-060b-43e3-94da-55b1fcf13664/cache.tzst -P -C /home/runner/work/PiliPlus/PiliPlus --use-compress-program unzstd
+2026-04-08T08:02:52.0461454Z Cache restored successfully
+2026-04-08T08:02:52.1587006Z Cache restored from key: setup-java-Linux-x64-gradle-97a443671dbd1dec5556448e69dc88a0c2cb6ff01c61710f6edcb748265eecc5
+2026-04-08T08:02:52.3411693Z ##[group]Run subosito/flutter-action@v2
+2026-04-08T08:02:52.3411968Z with:
+2026-04-08T08:02:52.3412148Z   channel: stable
+2026-04-08T08:02:52.3412362Z   flutter-version-file: pubspec.yaml
+2026-04-08T08:02:52.3412595Z   cache: true
+2026-04-08T08:02:52.3412775Z   architecture: X64
+2026-04-08T08:02:52.3412971Z   pub-cache-path: default
+2026-04-08T08:02:52.3413170Z   dry-run: false
+2026-04-08T08:02:52.3413411Z   git-source: https://github.com/flutter/flutter.git
+2026-04-08T08:02:52.3413681Z env:
+2026-04-08T08:02:52.3413909Z   JAVA_HOME: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:02:52.3414285Z   JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:02:52.3414591Z ##[endgroup]
+2026-04-08T08:02:52.4359563Z ##[group]Run chmod +x "$GITHUB_ACTION_PATH/setup.sh"
+2026-04-08T08:02:52.4360246Z [36;1mchmod +x "$GITHUB_ACTION_PATH/setup.sh"[0m
+2026-04-08T08:02:53.1250938Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-04-08T08:02:53.1251419Z env:
+2026-04-08T08:02:53.1251728Z   JAVA_HOME: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:02:53.1252204Z   JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:02:53.1252583Z ##[endgroup]
+2026-04-08T08:02:53.6593234Z ##[group]Run $GITHUB_ACTION_PATH/setup.sh -p \
+2026-04-08T08:02:53.6593609Z [36;1m$GITHUB_ACTION_PATH/setup.sh -p \[0m
+2026-04-08T08:02:53.6593858Z [36;1m  -n '' \[0m
+2026-04-08T08:02:53.6594059Z [36;1m  -f 'pubspec.yaml' \[0m
+2026-04-08T08:02:53.6594279Z [36;1m  -a 'X64' \[0m
+2026-04-08T08:02:53.6594462Z [36;1m  -k '' \[0m
+2026-04-08T08:02:53.6594641Z [36;1m  -c '' \[0m
+2026-04-08T08:02:53.6594820Z [36;1m  -l '' \[0m
+2026-04-08T08:02:53.6594995Z [36;1m  -d 'default' \[0m
+2026-04-08T08:02:53.6595300Z [36;1m  -g 'https://github.com/flutter/flutter.git' \[0m
+2026-04-08T08:02:53.6595586Z [36;1m  stable[0m
+2026-04-08T08:02:53.6611873Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-04-08T08:02:53.6612191Z env:
+2026-04-08T08:02:53.6612443Z   JAVA_HOME: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:02:53.6612829Z   JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:02:53.6613130Z ##[endgroup]
+2026-04-08T08:02:54.3554386Z ##[group]Run actions/cache@v5
+2026-04-08T08:02:54.3554614Z with:
+2026-04-08T08:02:54.3554845Z   path: /opt/hostedtoolcache/flutter/stable-3.41.6-x64
+2026-04-08T08:02:54.3555268Z   key: flutter-linux-stable-3.41.6-x64-db50e20168db8fee486b9abf32fc912de3bc5b6a
+2026-04-08T08:02:54.3555669Z   enableCrossOsArchive: false
+2026-04-08T08:02:54.3555899Z   fail-on-cache-miss: false
+2026-04-08T08:02:54.3556112Z   lookup-only: false
+2026-04-08T08:02:54.3556294Z   save-always: false
+2026-04-08T08:02:54.3556473Z env:
+2026-04-08T08:02:54.3556841Z   JAVA_HOME: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:02:54.3557209Z   JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:02:54.3557520Z ##[endgroup]
+2026-04-08T08:02:54.7089151Z Cache hit for: flutter-linux-stable-3.41.6-x64-db50e20168db8fee486b9abf32fc912de3bc5b6a
+2026-04-08T08:02:56.0008545Z Received 12582912 of 1663985562 (0.8%), 12.0 MBs/sec
+2026-04-08T08:02:57.0014736Z Received 134217728 of 1663985562 (8.1%), 64.0 MBs/sec
+2026-04-08T08:02:58.0053220Z Received 264241152 of 1663985562 (15.9%), 84.0 MBs/sec
+2026-04-08T08:02:59.0030680Z Received 322961408 of 1663985562 (19.4%), 77.0 MBs/sec
+2026-04-08T08:03:00.0071182Z Received 461373440 of 1663985562 (27.7%), 87.9 MBs/sec
+2026-04-08T08:03:01.0046111Z Received 591396864 of 1663985562 (35.5%), 93.9 MBs/sec
+2026-04-08T08:03:02.0050242Z Received 692060160 of 1663985562 (41.6%), 94.2 MBs/sec
+2026-04-08T08:03:03.0051939Z Received 805306368 of 1663985562 (48.4%), 96.0 MBs/sec
+2026-04-08T08:03:04.0220749Z Received 939524096 of 1663985562 (56.5%), 99.3 MBs/sec
+2026-04-08T08:03:05.0240922Z Received 1052770304 of 1663985562 (63.3%), 100.2 MBs/sec
+2026-04-08T08:03:06.0272529Z Received 1166016512 of 1663985562 (70.1%), 100.9 MBs/sec
+2026-04-08T08:03:07.0261565Z Received 1258291200 of 1663985562 (75.6%), 99.8 MBs/sec
+2026-04-08T08:03:08.0235527Z Received 1342177280 of 1663985562 (80.7%), 98.3 MBs/sec
+2026-04-08T08:03:09.0237464Z Received 1447034880 of 1663985562 (87.0%), 98.4 MBs/sec
+2026-04-08T08:03:10.0242507Z Received 1543503872 of 1663985562 (92.8%), 98.0 MBs/sec
+2026-04-08T08:03:11.0247441Z Received 1639972864 of 1663985562 (98.6%), 97.6 MBs/sec
+2026-04-08T08:03:11.2759476Z Received 1663985562 of 1663985562 (100.0%), 97.5 MBs/sec
+2026-04-08T08:03:11.2762863Z Cache Size: ~1587 MB (1663985562 B)
+2026-04-08T08:03:11.2897637Z [command]/usr/bin/tar -xf /home/runner/work/_temp/054a6f4c-7591-4c37-83ce-1a0fe2060e18/cache.tzst -P -C /home/runner/work/PiliPlus/PiliPlus --use-compress-program unzstd
+2026-04-08T08:03:14.9963697Z Cache restored successfully
+2026-04-08T08:03:15.3873652Z Cache restored from key: flutter-linux-stable-3.41.6-x64-db50e20168db8fee486b9abf32fc912de3bc5b6a
+2026-04-08T08:03:16.0969748Z ##[group]Run actions/cache@v5
+2026-04-08T08:03:16.0970061Z with:
+2026-04-08T08:03:16.0970263Z   path: /home/runner/.pub-cache
+2026-04-08T08:03:16.0970962Z   key: flutter-pub-linux-stable-3.41.6-x64-db50e20168db8fee486b9abf32fc912de3bc5b6a-84a91d52760c83f192d1767bd5fdc9c42cd022a688a9277b2a77faffc279c5de
+2026-04-08T08:03:16.0971688Z   enableCrossOsArchive: false
+2026-04-08T08:03:16.0971927Z   fail-on-cache-miss: false
+2026-04-08T08:03:16.0972145Z   lookup-only: false
+2026-04-08T08:03:16.0972345Z   save-always: false
+2026-04-08T08:03:16.0972524Z env:
+2026-04-08T08:03:16.0972760Z   JAVA_HOME: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:03:16.0973141Z   JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:03:16.0973453Z ##[endgroup]
+2026-04-08T08:03:16.4053937Z Cache not found for input keys: flutter-pub-linux-stable-3.41.6-x64-db50e20168db8fee486b9abf32fc912de3bc5b6a-84a91d52760c83f192d1767bd5fdc9c42cd022a688a9277b2a77faffc279c5de
+2026-04-08T08:03:16.4251775Z ##[group]Run $GITHUB_ACTION_PATH/setup.sh \
+2026-04-08T08:03:16.4252214Z [36;1m$GITHUB_ACTION_PATH/setup.sh \[0m
+2026-04-08T08:03:16.4252522Z [36;1m  -n '3.41.6' \[0m
+2026-04-08T08:03:16.4252777Z [36;1m  -a 'x64' \[0m
+2026-04-08T08:03:16.4253137Z [36;1m  -c '/opt/hostedtoolcache/flutter/stable-3.41.6-x64' \[0m
+2026-04-08T08:03:16.4253547Z [36;1m  -d '/home/runner/.pub-cache' \[0m
+2026-04-08T08:03:16.4253854Z [36;1m  stable[0m
+2026-04-08T08:03:16.4272096Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-04-08T08:03:16.4272424Z env:
+2026-04-08T08:03:16.4272697Z   JAVA_HOME: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:03:16.4273089Z   JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:03:16.4273412Z ##[endgroup]
+2026-04-08T08:03:16.7058308Z ##[group]Run lib/scripts/patch.ps1 android
+2026-04-08T08:03:16.7058779Z [36;1mlib/scripts/patch.ps1 android[0m
+2026-04-08T08:03:16.7085820Z shell: /usr/bin/pwsh -command ". '{0}'"
+2026-04-08T08:03:16.7086099Z env:
+2026-04-08T08:03:16.7086352Z   JAVA_HOME: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:03:16.7086750Z   JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:03:16.7087161Z   FLUTTER_ROOT: /opt/hostedtoolcache/flutter/stable-3.41.6-x64/flutter
+2026-04-08T08:03:16.7087518Z   PUB_CACHE: /home/runner/.pub-cache
+2026-04-08T08:03:16.7087764Z ##[endgroup]
+2026-04-08T08:03:18.7183304Z Updating files:  96% (14835/15358)
+2026-04-08T08:03:18.7320154Z Updating files:  97% (14898/15358)
+2026-04-08T08:03:18.7412413Z Updating files:  98% (15051/15358)
+2026-04-08T08:03:18.7474921Z Updating files:  99% (15205/15358)
+2026-04-08T08:03:18.7475458Z Updating files: 100% (15358/15358)
+2026-04-08T08:03:18.7475987Z Updating files: 100% (15358/15358), done.
+2026-04-08T08:03:18.7667537Z HEAD is now at db50e20168d Update changelog for 3.41.6 (#184170)
+2026-04-08T08:03:19.5782618Z No local changes to save
+2026-04-08T08:03:19.6296895Z [stable 0514099b4d9] Revert "Reimplemented StretchingOverscrollIndicator with Simulation ported from Android 12. (#173849)"
+2026-04-08T08:03:19.6297758Z  Date: Wed Apr 8 08:03:19 2026 +0000
+2026-04-08T08:03:19.6298145Z  3 files changed, 141 insertions(+), 292 deletions(-)
+2026-04-08T08:03:19.6768385Z 362b1de29974ffc1ed6faa826e1df870d7bec75f reverted
+2026-04-08T08:03:19.6832401Z No stash entries found.
+2026-04-08T08:03:19.6922435Z lib/scripts/modal_barrier.patch applied
+2026-04-08T08:03:19.6992984Z lib/scripts/mouse_cursor.patch applied
+2026-04-08T08:03:19.7060219Z lib/scripts/bottom_sheet.patch applied
+2026-04-08T08:03:19.9608006Z Downloading Linux x64 Dart SDK from Flutter engine 69e31205362b4e59b7eb89b24797e687b4b67afe...
+2026-04-08T08:03:19.9665808Z   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+2026-04-08T08:03:19.9667985Z                                  Dload  Upload   Total   Spent    Left  Speed
+2026-04-08T08:03:19.9668975Z 
+2026-04-08T08:03:20.1694968Z   0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+2026-04-08T08:03:21.0363305Z   0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+2026-04-08T08:03:22.0345798Z  27  222M   27 60.1M    0     0  56.2M      0  0:00:03  0:00:01  0:00:02 56.2M
+2026-04-08T08:03:22.4770287Z  73  222M   73  164M    0     0  79.3M      0  0:00:02  0:00:02 --:--:-- 79.3M
+2026-04-08T08:03:22.4770980Z 100  222M  100  222M    0     0  88.5M      0  0:00:02  0:00:02 --:--:-- 88.5M
+2026-04-08T08:03:27.1588500Z Building flutter tool...
+2026-04-08T08:03:27.1756037Z Resolving dependencies...
+2026-04-08T08:03:27.5252136Z Downloading packages...
+2026-04-08T08:03:29.4048933Z   _fe_analyzer_shared 92.0.0 (98.0.0 available)
+2026-04-08T08:03:29.4050088Z   analyzer 9.0.0 (12.0.0 available)
+2026-04-08T08:03:29.4050586Z   archive 3.6.1 (4.0.9 available)
+2026-04-08T08:03:29.4051069Z   async 2.13.0 (2.13.1 available)
+2026-04-08T08:03:29.4051579Z   built_value 8.12.1 (8.12.5 available)
+2026-04-08T08:03:29.4052070Z   dart_style 3.1.3 (3.1.8 available)
+2026-04-08T08:03:29.4052553Z   dds 5.1.0 (5.3.0 available)
+2026-04-08T08:03:29.4053028Z   devtools_shared 12.0.0 (12.1.0 available)
+2026-04-08T08:03:29.4053460Z   dwds 26.2.3 (27.0.1 available)
+2026-04-08T08:03:29.4053736Z   ffi 2.1.4 (2.2.0 available)
+2026-04-08T08:03:29.4054075Z   hooks 1.0.0 (1.0.2 available)
+2026-04-08T08:03:29.4054537Z   hooks_runner 1.0.1 (1.1.1 available)
+2026-04-08T08:03:29.4055034Z   js 0.7.2 (discontinued)
+2026-04-08T08:03:29.4055498Z   json_annotation 4.9.0 (4.11.0 available)
+2026-04-08T08:03:29.4056025Z   json_rpc_2 4.0.0 (4.1.0 available)
+2026-04-08T08:03:29.4056509Z   meta 1.17.0 (1.18.2 available)
+2026-04-08T08:03:29.4057007Z   mustache_template 2.0.2 (2.0.4 available)
+2026-04-08T08:03:29.4057560Z   petitparser 7.0.1 (7.0.2 available)
+2026-04-08T08:03:29.4058468Z   source_span 1.10.1 (1.10.2 available)
+2026-04-08T08:03:29.4058964Z   test 1.30.0 (1.31.0 available)
+2026-04-08T08:03:29.4059192Z   test_api 0.7.10 (0.7.11 available)
+2026-04-08T08:03:29.4059428Z   test_core 0.6.16 (0.6.17 available)
+2026-04-08T08:03:29.4059896Z   unified_analytics 8.0.10 (8.0.14 available)
+2026-04-08T08:03:29.4060247Z   usage 4.1.1 (discontinued)
+2026-04-08T08:03:29.4060466Z   uuid 4.5.2 (4.5.3 available)
+2026-04-08T08:03:29.4060695Z   watcher 1.2.0 (1.2.1 available)
+2026-04-08T08:03:29.4060930Z   yaml_edit 2.2.3 (2.2.4 available)
+2026-04-08T08:03:29.4061190Z No dependencies changed.
+2026-04-08T08:03:29.4061423Z 2 packages are discontinued.
+2026-04-08T08:03:29.4061764Z 25 packages have newer versions incompatible with dependency constraints.
+2026-04-08T08:03:29.4062141Z Try `dart pub outdated` for more information.
+2026-04-08T08:03:44.4048992Z Flutter 3.41.6 • channel stable • https://github.com/flutter/flutter.git
+2026-04-08T08:03:44.4050160Z Framework • revision db50e20168 (13 days ago) • 2026-03-25 16:21:00 -0700
+2026-04-08T08:03:44.4051251Z Engine • hash f30a7ba78d16a6eaa86bb3fe2b55c668d1da49c6 (revision 69e3120536) (8 days ago) • 2026-03-30 22:55:23.000Z
+2026-04-08T08:03:44.4052365Z Tools • Dart 3.12.0 (build 3.12.0-303.0.dev) • DevTools 2.57.0-dev.0
+2026-04-08T08:03:44.4499052Z ##[group]Run if [ ! -z "" ]; then
+2026-04-08T08:03:44.4499355Z [36;1mif [ ! -z "" ]; then[0m
+2026-04-08T08:03:44.4499893Z [36;1m  echo "" | base64 --decode > android/app/key.jks[0m
+2026-04-08T08:03:44.4500314Z [36;1m  echo storeFile='key.jks' >> android/key.properties[0m
+2026-04-08T08:03:44.4500673Z [36;1m  echo storePassword='' >> android/key.properties[0m
+2026-04-08T08:03:44.4501008Z [36;1m  echo keyAlias='' >> android/key.properties[0m
+2026-04-08T08:03:44.4501349Z [36;1m  echo keyPassword='' >> android/key.properties[0m
+2026-04-08T08:03:44.4501638Z [36;1mfi[0m
+2026-04-08T08:03:44.4518324Z shell: /usr/bin/bash -e {0}
+2026-04-08T08:03:44.4518573Z env:
+2026-04-08T08:03:44.4518831Z   JAVA_HOME: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:03:44.4519245Z   JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:03:44.4519807Z   FLUTTER_ROOT: /opt/hostedtoolcache/flutter/stable-3.41.6-x64/flutter
+2026-04-08T08:03:44.4520298Z   PUB_CACHE: /home/runner/.pub-cache
+2026-04-08T08:03:44.4520548Z ##[endgroup]
+2026-04-08T08:03:44.4580243Z ##[group]Run lib/scripts/build.ps1 android
+2026-04-08T08:03:44.4580565Z [36;1mlib/scripts/build.ps1 android[0m
+2026-04-08T08:03:44.4598616Z shell: /usr/bin/pwsh -command ". '{0}'"
+2026-04-08T08:03:44.4598973Z env:
+2026-04-08T08:03:44.4599223Z   JAVA_HOME: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:03:44.4599750Z   JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:03:44.4600292Z   FLUTTER_ROOT: /opt/hostedtoolcache/flutter/stable-3.41.6-x64/flutter
+2026-04-08T08:03:44.4600642Z   PUB_CACHE: /home/runner/.pub-cache
+2026-04-08T08:03:44.4600891Z ##[endgroup]
+2026-04-08T08:03:44.8405467Z ##[group]Run flutter build apk --release --split-per-abi --dart-define-from-file=pili_release.json --pub
+2026-04-08T08:03:44.8406695Z [36;1mflutter build apk --release --split-per-abi --dart-define-from-file=pili_release.json --pub[0m
+2026-04-08T08:03:44.8432540Z shell: /usr/bin/bash -e {0}
+2026-04-08T08:03:44.8432927Z env:
+2026-04-08T08:03:44.8433338Z   JAVA_HOME: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:03:44.8433997Z   JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Zulu_jdk/17.0.18-8/x64
+2026-04-08T08:03:44.8434676Z   FLUTTER_ROOT: /opt/hostedtoolcache/flutter/stable-3.41.6-x64/flutter
+2026-04-08T08:03:44.8435224Z   PUB_CACHE: /home/runner/.pub-cache
+2026-04-08T08:03:44.8435638Z   version: 2.0.3-a9628adf2+4841
+2026-04-08T08:03:44.8436020Z ##[endgroup]
+2026-04-08T08:03:45.1508481Z Downloading Material fonts...                                      209ms
+2026-04-08T08:03:45.2165180Z Downloading Gradle Wrapper...                                       17ms
+2026-04-08T08:03:45.5188071Z Downloading package sky_engine...                                  286ms
+2026-04-08T08:03:45.7541859Z Downloading package flutter_gpu...                                 177ms
+2026-04-08T08:03:46.1525914Z Downloading flutter_patched_sdk tools...                           387ms
+2026-04-08T08:03:46.5813097Z Downloading flutter_patched_sdk_product tools...                   337ms
+2026-04-08T08:03:47.5424343Z Downloading linux-x64 tools...                                     870ms
+2026-04-08T08:03:48.3603446Z Downloading linux-x64/font-subset tools...                         220ms
+2026-04-08T08:03:48.6973370Z Downloading android-arm-profile/linux-x64 tools...                 236ms
+2026-04-08T08:03:49.0046796Z Downloading android-arm-release/linux-x64 tools...                 245ms
+2026-04-08T08:03:49.2581405Z Downloading android-arm64-profile/linux-x64 tools...               194ms
+2026-04-08T08:03:49.5777225Z Downloading android-arm64-release/linux-x64 tools...               255ms
+2026-04-08T08:03:49.8988002Z Downloading android-x64-profile/linux-x64 tools...                 263ms
+2026-04-08T08:03:50.1960850Z Downloading android-x64-release/linux-x64 tools...                 235ms
+2026-04-08T08:03:50.3479404Z Resolving dependencies...
+2026-04-08T08:04:14.2712512Z Downloading packages...
+2026-04-08T08:04:25.4198894Z   _fe_analyzer_shared 93.0.0 (98.0.0 available)
+2026-04-08T08:04:25.4199518Z   analyzer 10.0.1 (12.0.0 available)
+2026-04-08T08:04:25.4200111Z   dart_style 3.1.7 (3.1.8 available)
+2026-04-08T08:04:25.4200496Z ! font_awesome_flutter 10.9.0 (overridden) (11.0.0 available)
+2026-04-08T08:04:25.4201385Z ! media_kit 1.1.11 from git https://github.com/My-Responsitories/media-kit.git at 14c3ee in media_kit (overridden)
+2026-04-08T08:04:25.4202428Z ! media_kit_libs_android_video 1.3.7 from git https://github.com/My-Responsitories/media-kit.git at 14c3ee in libs/android/media_kit_libs_android_video (overridden)
+2026-04-08T08:04:25.4203591Z ! media_kit_libs_ios_video 1.1.4 from git https://github.com/bggRGjQaUbCoE/media-kit.git at 547999 in libs/ios/media_kit_libs_ios_video (overridden)
+2026-04-08T08:04:25.4204681Z ! media_kit_libs_macos_video 1.1.4 from git https://github.com/bggRGjQaUbCoE/media-kit.git at 547999 in libs/macos/media_kit_libs_macos_video (overridden)
+2026-04-08T08:04:25.4205763Z ! media_kit_libs_video 1.0.5 from git https://github.com/My-Responsitories/media-kit.git at 14c3ee in libs/universal/media_kit_libs_video (overridden)
+2026-04-08T08:04:25.4206900Z ! media_kit_libs_windows_video 1.0.10 from git https://github.com/My-Responsitories/media-kit.git at 14c3ee in libs/windows/media_kit_libs_windows_video (overridden)
+2026-04-08T08:04:25.4208027Z ! media_kit_native_event_loop 1.0.9 from git https://github.com/My-Responsitories/media-kit.git at 14c3ee in media_kit_native_event_loop (overridden)
+2026-04-08T08:04:25.4209020Z ! media_kit_video 1.2.5 from git https://github.com/My-Responsitories/media-kit.git at 14c3ee in media_kit_video (overridden)
+2026-04-08T08:04:25.4210006Z   meta 1.17.0 (1.18.2 available)
+2026-04-08T08:04:25.4210310Z ! mime 2.0.0 (overridden)
+2026-04-08T08:04:25.4210596Z ! path 1.9.1 (overridden)
+2026-04-08T08:04:25.4210936Z ! path_provider_android 2.2.23 (overridden) (2.3.0 available)
+2026-04-08T08:04:25.4211338Z   pointycastle 3.9.1 (4.0.0 available)
+2026-04-08T08:04:25.4211650Z   punycoder 0.2.2 (0.3.0 available)
+2026-04-08T08:04:25.4212120Z ! rxdart 0.28.0 (overridden)
+2026-04-08T08:04:25.4212615Z ! screen_brightness_android 2.1.3 (overridden)
+2026-04-08T08:04:25.4213125Z ! screen_brightness_ios 2.1.2 (overridden)
+2026-04-08T08:04:25.4213506Z ! screen_brightness_platform_interface 2.1.0 (overridden)
+2026-04-08T08:04:25.4213871Z   test_api 0.7.10 (0.7.11 available)
+2026-04-08T08:04:25.4214166Z   vector_math 2.2.0 (2.3.0 available)
+2026-04-08T08:04:25.4214458Z   win32 5.15.0 (6.0.0 available)
+2026-04-08T08:04:25.4214756Z   win32_registry 2.1.0 (3.0.2 available)
+2026-04-08T08:04:25.4215078Z Got dependencies!
+2026-04-08T08:04:25.4215461Z 12 packages have newer versions incompatible with dependency constraints.
+2026-04-08T08:04:25.4216060Z Try `flutter pub outdated` for more information.
+2026-04-08T08:04:55.1667342Z Running Gradle task 'assembleRelease'...                        
+2026-04-08T08:04:55.1670872Z Downloading file from: https://github.com/My-Responsitories/libmpv-android-video-build/releases/download/vnext/default-arm64-v8a.jar
+2026-04-08T08:04:56.2614721Z Downloading file from: https://github.com/My-Responsitories/libmpv-android-video-build/releases/download/vnext/default-armeabi-v7a.jar
+2026-04-08T08:04:56.7615057Z Downloading file from: https://github.com/My-Responsitories/libmpv-android-video-build/releases/download/vnext/default-x86_64.jar
+2026-04-08T08:04:57.2611788Z Downloading file from: https://github.com/My-Responsitories/libmpv-android-video-build/releases/download/vnext/default-x86.jar
+2026-04-08T08:05:03.1611685Z Checking the license for package Android SDK Platform 31 in /usr/local/lib/android/sdk/licenses
+2026-04-08T08:05:03.1612729Z License for package Android SDK Platform 31 accepted.
+2026-04-08T08:05:03.1613472Z Preparing "Install Android SDK Platform 31 (revision 1)".
+2026-04-08T08:05:05.8610696Z "Install Android SDK Platform 31 (revision 1)" ready.
+2026-04-08T08:05:05.8612418Z Installing Android SDK Platform 31 in /usr/local/lib/android/sdk/platforms/android-31
+2026-04-08T08:05:05.8615964Z "Install Android SDK Platform 31 (revision 1)" complete.
+2026-04-08T08:05:06.0612510Z "Install Android SDK Platform 31 (revision 1)" finished.
+2026-04-08T08:05:19.0640575Z lib/pages/video/controller.dart:293:20: Error: The getter 'LastVideoKey' isn't defined for the type 'VideoDetailController'.
+2026-04-08T08:05:19.0642952Z  - 'VideoDetailController' is from 'package:PiliPlus/pages/video/controller.dart' ('lib/pages/video/controller.dart').
+2026-04-08T08:05:19.0644414Z Try correcting the name to the name of an existing getter, or defining a getter or field named 'LastVideoKey'.
+2026-04-08T08:05:19.0645324Z       videoBox.put(LastVideoKey.lastVideoBvid, bvid);
+2026-04-08T08:05:19.0645843Z                    ^^^^^^^^^^^^
+2026-04-08T08:05:19.0646672Z lib/pages/video/controller.dart:294:20: Error: The getter 'LastVideoKey' isn't defined for the type 'VideoDetailController'.
+2026-04-08T08:05:19.0648004Z  - 'VideoDetailController' is from 'package:PiliPlus/pages/video/controller.dart' ('lib/pages/video/controller.dart').
+2026-04-08T08:05:19.0649278Z Try correcting the name to the name of an existing getter, or defining a getter or field named 'LastVideoKey'.
+2026-04-08T08:05:19.0650336Z       videoBox.put(LastVideoKey.lastVideoCid, cid.value);
+2026-04-08T08:05:19.0650869Z                    ^^^^^^^^^^^^
+2026-04-08T08:05:19.0651708Z lib/pages/video/controller.dart:295:20: Error: The getter 'LastVideoKey' isn't defined for the type 'VideoDetailController'.
+2026-04-08T08:05:19.0653139Z  - 'VideoDetailController' is from 'package:PiliPlus/pages/video/controller.dart' ('lib/pages/video/controller.dart').
+2026-04-08T08:05:19.0654988Z Try correcting the name to the name of an existing getter, or defining a getter or field named 'LastVideoKey'.
+2026-04-08T08:05:19.0655932Z       videoBox.put(LastVideoKey.lastVideoAid, aid);
+2026-04-08T08:05:19.0656447Z                    ^^^^^^^^^^^^
+2026-04-08T08:05:19.0657338Z lib/pages/video/controller.dart:296:20: Error: The getter 'LastVideoKey' isn't defined for the type 'VideoDetailController'.
+2026-04-08T08:05:19.0658766Z  - 'VideoDetailController' is from 'package:PiliPlus/pages/video/controller.dart' ('lib/pages/video/controller.dart').
+2026-04-08T08:05:19.0660168Z Try correcting the name to the name of an existing getter, or defining a getter or field named 'LastVideoKey'.
+2026-04-08T08:05:19.0661117Z       videoBox.put(LastVideoKey.lastVideoBusiness, videoType.name);
+2026-04-08T08:05:19.0661665Z                    ^^^^^^^^^^^^
+2026-04-08T08:05:19.0662484Z lib/pages/video/controller.dart:323:24: Error: The getter 'LastVideoKey' isn't defined for the type 'VideoDetailController'.
+2026-04-08T08:05:19.0663847Z  - 'VideoDetailController' is from 'package:PiliPlus/pages/video/controller.dart' ('lib/pages/video/controller.dart').
+2026-04-08T08:05:19.0665294Z Try correcting the name to the name of an existing getter, or defining a getter or field named 'LastVideoKey'.
+2026-04-08T08:05:19.0666188Z           videoBox.put(LastVideoKey.lastVideoEpid, epId);
+2026-04-08T08:05:19.0666700Z                        ^^^^^^^^^^^^
+2026-04-08T08:05:19.0667555Z lib/pages/video/controller.dart:328:22: Error: The getter 'LastVideoKey' isn't defined for the type 'VideoDetailController'.
+2026-04-08T08:05:19.0668903Z  - 'VideoDetailController' is from 'package:PiliPlus/pages/video/controller.dart' ('lib/pages/video/controller.dart').
+2026-04-08T08:05:19.0670273Z Try correcting the name to the name of an existing getter, or defining a getter or field named 'LastVideoKey'.
+2026-04-08T08:05:19.0671106Z         videoBox.put(LastVideoKey.lastVideoTitle, title);
+2026-04-08T08:05:19.0671624Z                      ^^^^^^^^^^^^
+2026-04-08T08:05:19.0672429Z lib/pages/video/controller.dart:331:22: Error: The getter 'LastVideoKey' isn't defined for the type 'VideoDetailController'.
+2026-04-08T08:05:19.0673452Z  - 'VideoDetailController' is from 'package:PiliPlus/pages/video/controller.dart' ('lib/pages/video/controller.dart').
+2026-04-08T08:05:19.0674158Z Try correcting the name to the name of an existing getter, or defining a getter or field named 'LastVideoKey'.
+2026-04-08T08:05:19.0674664Z         videoBox.put(LastVideoKey.lastVideoCover, cover);
+2026-04-08T08:05:19.0674963Z                      ^^^^^^^^^^^^
+2026-04-08T08:05:19.0675440Z lib/pages/video/controller.dart:334:22: Error: The getter 'LastVideoKey' isn't defined for the type 'VideoDetailController'.
+2026-04-08T08:05:19.0676181Z  - 'VideoDetailController' is from 'package:PiliPlus/pages/video/controller.dart' ('lib/pages/video/controller.dart').
+2026-04-08T08:05:19.0676874Z Try correcting the name to the name of an existing getter, or defining a getter or field named 'LastVideoKey'.
+2026-04-08T08:05:19.0677455Z         videoBox.put(LastVideoKey.lastVideoPage, pageIndex);
+2026-04-08T08:05:19.0677767Z                      ^^^^^^^^^^^^
+2026-04-08T08:05:19.0678243Z lib/pages/video/controller.dart:339:22: Error: The getter 'LastVideoKey' isn't defined for the type 'VideoDetailController'.
+2026-04-08T08:05:19.0678978Z  - 'VideoDetailController' is from 'package:PiliPlus/pages/video/controller.dart' ('lib/pages/video/controller.dart').
+2026-04-08T08:05:19.0679836Z Try correcting the name to the name of an existing getter, or defining a getter or field named 'LastVideoKey'.
+2026-04-08T08:05:19.0680427Z         videoBox.put(LastVideoKey.lastVideoTimestamp, playedTime!.inMilliseconds);
+2026-04-08T08:05:19.0680803Z                      ^^^^^^^^^^^^
+2026-04-08T08:05:30.2614177Z Target kernel_snapshot_program failed: Exception
+2026-04-08T08:05:30.2615829Z 
+2026-04-08T08:05:30.3680431Z 
+2026-04-08T08:05:30.3690586Z FAILURE: Build failed with an exception.
+2026-04-08T08:05:30.3692012Z 
+2026-04-08T08:05:30.3694509Z * What went wrong:
+2026-04-08T08:05:30.3720880Z Execution failed for task ':app:compileFlutterBuildRelease'.
+2026-04-08T08:05:30.3722278Z > Process 'command '/opt/hostedtoolcache/flutter/stable-3.41.6-x64/flutter/bin/flutter'' finished with non-zero exit value 1
+2026-04-08T08:05:30.3723115Z 
+2026-04-08T08:05:30.3723234Z * Try:
+2026-04-08T08:05:30.3723637Z > Run with --stacktrace option to get the stack trace.
+2026-04-08T08:05:30.3724275Z > Run with --info or --debug option to get more log output.
+2026-04-08T08:05:30.3724846Z > Run with --scan to get full insights.
+2026-04-08T08:05:30.3725360Z > Get more help at https://help.gradle.org.
+2026-04-08T08:05:30.3725745Z 
+2026-04-08T08:05:30.3725983Z BUILD FAILED in 1m 4s
+2026-04-08T08:05:30.9031196Z [=========                              ] 25%                                   
+2026-04-08T08:05:30.9042215Z Running Gradle task 'assembleRelease'...                           64.9s
+2026-04-08T08:05:30.9121440Z Gradle task assembleRelease failed with exit code 1
+2026-04-08T08:05:30.9166590Z ##[error]Process completed with exit code 1.
+2026-04-08T08:05:30.9321724Z Post job cleanup.
+2026-04-08T08:05:30.9379797Z Post job cleanup.
+2026-04-08T08:05:31.0638357Z Post job cleanup.
+2026-04-08T08:05:31.1444698Z [command]/usr/bin/git version
+2026-04-08T08:05:31.1478393Z git version 2.53.0
+2026-04-08T08:05:31.1508931Z Copying '/home/runner/.gitconfig' to '/home/runner/work/_temp/46334509-b49c-4cfc-9921-2c7f7d677fc3/.gitconfig'
+2026-04-08T08:05:31.1517472Z Temporarily overriding HOME='/home/runner/work/_temp/46334509-b49c-4cfc-9921-2c7f7d677fc3' before making global git config changes
+2026-04-08T08:05:31.1518855Z Adding repository directory to the temporary git global config as a safe directory
+2026-04-08T08:05:31.1523594Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/PiliPlus/PiliPlus
+2026-04-08T08:05:31.1550961Z Removing SSH command configuration
+2026-04-08T08:05:31.1557162Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-04-08T08:05:31.1586090Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-04-08T08:05:31.1790346Z Removing HTTP extra header
+2026-04-08T08:05:31.1794935Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-04-08T08:05:31.1826116Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-04-08T08:05:31.1996742Z Removing includeIf entries pointing to credentials config files
+2026-04-08T08:05:31.2003190Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-04-08T08:05:31.2022793Z includeif.gitdir:/home/runner/work/PiliPlus/PiliPlus/.git.path
+2026-04-08T08:05:31.2023586Z includeif.gitdir:/home/runner/work/PiliPlus/PiliPlus/.git/worktrees/*.path
+2026-04-08T08:05:31.2024227Z includeif.gitdir:/github/workspace/.git.path
+2026-04-08T08:05:31.2024810Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-04-08T08:05:31.2031691Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/PiliPlus/PiliPlus/.git.path
+2026-04-08T08:05:31.2048570Z /home/runner/work/_temp/git-credentials-6a3cafbe-f577-4898-a32d-17a31370c9a3.config
+2026-04-08T08:05:31.2057015Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/PiliPlus/PiliPlus/.git.path /home/runner/work/_temp/git-credentials-6a3cafbe-f577-4898-a32d-17a31370c9a3.config
+2026-04-08T08:05:31.2086013Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/PiliPlus/PiliPlus/.git/worktrees/*.path
+2026-04-08T08:05:31.2104348Z /home/runner/work/_temp/git-credentials-6a3cafbe-f577-4898-a32d-17a31370c9a3.config
+2026-04-08T08:05:31.2111974Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/PiliPlus/PiliPlus/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-6a3cafbe-f577-4898-a32d-17a31370c9a3.config
+2026-04-08T08:05:31.2138028Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-04-08T08:05:31.2154877Z /github/runner_temp/git-credentials-6a3cafbe-f577-4898-a32d-17a31370c9a3.config
+2026-04-08T08:05:31.2160821Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-6a3cafbe-f577-4898-a32d-17a31370c9a3.config
+2026-04-08T08:05:31.2189155Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-04-08T08:05:31.2207333Z /github/runner_temp/git-credentials-6a3cafbe-f577-4898-a32d-17a31370c9a3.config
+2026-04-08T08:05:31.2215531Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-6a3cafbe-f577-4898-a32d-17a31370c9a3.config
+2026-04-08T08:05:31.2242148Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-04-08T08:05:31.2430672Z Removing credentials config '/home/runner/work/_temp/git-credentials-6a3cafbe-f577-4898-a32d-17a31370c9a3.config'
+2026-04-08T08:05:31.2565269Z Cleaning up orphan processes
+2026-04-08T08:05:31.2938027Z Terminate orphan process: pid (3824) (java)
