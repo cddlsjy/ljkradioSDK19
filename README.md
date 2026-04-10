@@ -1,13 +1,14 @@
----
+***
+
 AIGC:
-    ContentProducer: Minimax Agent AI
-    ContentPropagator: Minimax Agent AI
-    Label: AIGC
-    ProduceID: "00000000000000000000000000000000"
-    PropagateID: "00000000000000000000000000000000"
-    ReservedCode1: 3046022100adaae23e8380057f676079b0e17bb31ea5d3600912f5318538d943be9d48a1c20221008d5dbb3039fa4cf127108c060b4423b9bcbecf7e956ee10f0b665425301429ac
-    ReservedCode2: 3045022054cf744e035d08603b8f78829564ffa5ac83a21c313beafdf2edabddb6fad482022100c5eb49799822d23d5828581e64610276fb9ae017c75663433bfdedb46a054c65
----
+ContentProducer: Minimax Agent AI
+ContentPropagator: Minimax Agent AI
+Label: AIGC
+ProduceID: "00000000000000000000000000000000"
+PropagateID: "00000000000000000000000000000000"
+ReservedCode1: 3046022100adaae23e8380057f676079b0e17bb31ea5d3600912f5318538d943be9d48a1c20221008d5dbb3039fa4cf127108c060b4423b9bcbecf7e956ee10f0b665425301429ac
+ReservedCode2: 3045022054cf744e035d08603b8f78829564ffa5ac83a21c313beafdf2edabddb6fad482022100c5eb49799822d23d5828581e64610276fb9ae017c75663433bfdedb46a054c65
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # IjkPlayer 网络电台播放器
 
@@ -93,19 +94,14 @@ ijk-radio-player/
 
 ## 默认电台列表
 
-应用内置了以下默认电台：
-
-1. BBC World Service
-2. Radio Paradise Main Mix
-3. SomaFM Groove Salad
-4. Jazz24
-5. Classic FM
+应用内置了以下默认电台：test
 
 ## 架构说明
 
 ### IjkPlayerManager 单例
 
 核心播放器管理类，负责：
+
 - 播放器初始化和配置
 - 播放控制（播放、暂停、停止）
 - 音量调节
@@ -115,6 +111,7 @@ ijk-radio-player/
 ### 播放状态管理
 
 使用 Kotlin 密封类 `PlaybackState` 表示播放器的各种状态：
+
 - `Stopped` - 停止
 - `Buffering` - 缓冲中
 - `Playing` - 正在播放
@@ -124,6 +121,7 @@ ijk-radio-player/
 ### 数据持久化
 
 使用 SharedPreferences 存储：
+
 - 电台列表（JSON格式）
 - 上次播放的电台ID
 - 音量设置
@@ -143,13 +141,14 @@ setHardwareDecode(false)       // 禁用硬解码，使用软解
 ### 缓冲策略
 
 修改缓冲区大小（单位：字节）：
+
 ```kotlin
 setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, "max-buffer-size", 1024 * 1024)
 ```
 
 ## 注意事项
 
-1. **网络权限**：应用需要 INTERNET 和 ACCESS_NETWORK_STATE 权限
+1. **网络权限**：应用需要 INTERNET 和 ACCESS\_NETWORK\_STATE 权限
 2. **明文流量**：由于部分电台使用 HTTP 协议，需要设置 `android:usesCleartextTraffic="true"`
 3. **架构兼容**：如需支持其他架构，添加对应 IjkPlayer 库（arm64、x86）
 
