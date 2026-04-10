@@ -8,10 +8,14 @@ import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.RecyclerView
+import kotlinx.coroutines.launch
 import androidx.recyclerview.widget.ItemTouchHelper
 import com.example.ijkradio.data.Station
 import com.example.ijkradio.data.StationStorage
+import com.example.ijkradio.player.IPlayerManager
+import com.example.ijkradio.player.ExoPlayerManager
 import com.example.ijkradio.player.IjkPlayerManager
 import com.example.ijkradio.ui.PlaybackState
 import com.example.ijkradio.ui.StationAdapter
@@ -42,7 +46,7 @@ class MainActivity : AppCompatActivity() {
 
     // 数据和播放器
     private lateinit var stationStorage: StationStorage
-    private lateinit var playerManager: IjkPlayerManager
+    private lateinit var playerManager: IPlayerManager
 
     // 电台列表
     private var stations: MutableList<Station> = mutableListOf()
@@ -92,7 +96,13 @@ class MainActivity : AppCompatActivity() {
      * 初始化播放器
      */
     private fun initPlayer() {
-        playerManager = IjkPlayerManager.getInstance(this)
+        // 根据保存的播放器引擎选择初始化播放器
+        val useExoPlayer = stationStorage.getUseExoPlayer()
+        playerManager = if (useExoPlayer) {
+            ExoPlayerManager.getInstance(this)
+        } else {
+            IjkPlayerManager.getInstance(this)
+        }
         playerManager.initialize()
 
         // 设置保存的音量
@@ -154,8 +164,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         // 监听播放器状态
-        playerManager.playbackState.observe(this) {
-            updatePlaybackUI(it)
+        lifecycleScope.launch {
+            playerManager.playbackState.collect {
+                updatePlaybackUI(it)
+            }
         }
     }
 
@@ -370,6 +382,8 @@ class MainActivity : AppCompatActivity() {
 
         volumeSlider = dialogView.findViewById<Slider>(R.id.volume_slider)
         volumeIcon = dialogView.findViewById<ImageView>(R.id.volume_icon)
+        val radioExo = dialogView.findViewById<RadioButton>(R.id.radio_exo)
+        val radioIjk = dialogView.findViewById<RadioButton>(R.id.radio_ijk)
         val radioHardware = dialogView.findViewById<RadioButton>(R.id.radio_hardware)
         val radioSoftware = dialogView.findViewById<RadioButton>(R.id.radio_software)
         val autoPlaySwitch = dialogView.findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.auto_play_switch)
@@ -378,6 +392,14 @@ class MainActivity : AppCompatActivity() {
         // 初始化音量滑块
         volumeSlider.value = stationStorage.getVolume()
         updateVolumeIcon(stationStorage.getVolume())
+
+        // 初始化播放器引擎
+        val useExoPlayer = stationStorage.getUseExoPlayer()
+        if (useExoPlayer) {
+            radioExo.isChecked = true
+        } else {
+            radioIjk.isChecked = true
+        }
 
         // 初始化解码方式，默认打开软解码
         radioSoftware.isChecked = true
@@ -411,6 +433,10 @@ class MainActivity : AppCompatActivity() {
         val dialog = AlertDialog.Builder(this)
             .setView(dialogView)
             .setPositiveButton("确定") { _, _ ->
+                // 保存播放器引擎设置
+                val useExoPlayer = radioExo.isChecked
+                stationStorage.saveUseExoPlayer(useExoPlayer)
+                
                 // 保存解码方式设置
                 val useHardwareDecode = radioHardware.isChecked
                 playerManager.setHardwareDecode(useHardwareDecode)

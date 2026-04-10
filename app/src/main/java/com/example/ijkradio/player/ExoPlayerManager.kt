@@ -1,0 +1,232 @@
+package com.example.ijkradio.player
+
+import android.content.Context
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.asFlow
+import com.example.ijkradio.data.Station
+import com.example.ijkradio.ui.PlaybackState
+import com.google.android.exoplayer2.*
+import com.google.android.exoplayer2.audio.AudioAttributes
+import com.google.android.exoplayer2.source.ProgressiveMediaSource
+import com.google.android.exoplayer2.upstream.DefaultDataSourceFactory
+import com.google.android.exoplayer2.util.Util
+import kotlinx.coroutines.flow.Flow
+
+/**
+ * ExoPlayer 播放器管理器单例类
+ * 负责管理 ExoPlayer 的生命周期和播放控制
+ */
+class ExoPlayerManager private constructor(private val context: Context) : IPlayerManager {
+
+    companion object {
+        private const val TAG = "ExoPlayerManager"
+
+        @Volatile
+        private var instance: ExoPlayerManager? = null
+
+        fun getInstance(context: Context): ExoPlayerManager {
+            return instance ?: synchronized(this) {
+                instance ?: ExoPlayerManager(context.applicationContext).also { instance = it }
+            }
+        }
+    }
+
+    // 播放器实例
+    private var exoPlayer: ExoPlayer? = null
+
+    // 当前播放的电台
+    private var currentStation: Station? = null
+
+    // 播放状态
+    private val _playbackState = MutableLiveData<PlaybackState>(PlaybackState.Stopped)
+    
+    // 实现IPlayerManager接口的playbackState属性
+    override val playbackState: Flow<PlaybackState>
+        get() = _playbackState.asFlow()
+
+    // 音量 (0.0 - 1.0)
+    private var currentVolume = 1.0f
+
+    // 硬解码开关
+    private var hardwareDecodeEnabled = true
+
+    /**
+     * 初始化播放器
+     */
+    override fun initialize() {
+        try {
+            // 创建ExoPlayer实例
+            exoPlayer = ExoPlayer.Builder(context)
+                .setAudioAttributes(AudioAttributes.DEFAULT, true)
+                .setHandleAudioBecomingNoisy(true)
+                .build()
+
+            // 设置播放器监听器
+            exoPlayer?.addListener(ExoPlayerListener())
+
+            Log.d(TAG, "ExoPlayer initialized successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize ExoPlayer", e)
+            _playbackState.postValue(PlaybackState.Error("播放器初始化失败: ${e.message}"))
+        }
+    }
+
+    /**
+     * 播放电台
+     */
+    override fun playStation(station: Station) {
+        Log.d(TAG, "Playing station: ${station.name}, URL: ${station.url}")
+        currentStation = station
+        _playbackState.postValue(PlaybackState.Buffering)
+
+        try {
+            exoPlayer?.let { player ->
+                // 创建数据源工厂
+                val dataSourceFactory = DefaultDataSourceFactory(
+                    context,
+                    Util.getUserAgent(context, "IjkRadioPlayer")
+                )
+
+                // 创建媒体源
+                val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
+                    .createMediaSource(MediaItem.fromUri(Uri.parse(station.url)))
+
+                // 准备播放器
+                player.setMediaSource(mediaSource)
+                player.prepare()
+                player.play()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error playing station", e)
+            _playbackState.postValue(PlaybackState.Error("播放失败: ${e.message}"))
+        }
+    }
+
+    /**
+     * 暂停播放
+     */
+    override fun pause() {
+        try {
+            exoPlayer?.let { player ->
+                if (player.isPlaying) {
+                    player.pause()
+                    _playbackState.postValue(PlaybackState.Paused)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error pausing playback", e)
+        }
+    }
+
+    /**
+     * 恢复播放
+     */
+    override fun resume() {
+        try {
+            exoPlayer?.let { player ->
+                player.play()
+                currentStation?.let { station ->
+                    _playbackState.postValue(PlaybackState.Playing(station.name))
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error resuming playback", e)
+        }
+    }
+
+    /**
+     * 停止播放
+     */
+    override fun stop() {
+        try {
+            exoPlayer?.let { player ->
+                player.stop()
+                _playbackState.postValue(PlaybackState.Stopped)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping playback", e)
+        }
+    }
+
+    /**
+     * 设置音量
+     */
+    override fun setVolume(volume: Float) {
+        currentVolume = volume.coerceIn(0f, 1f)
+        try {
+            exoPlayer?.volume = currentVolume
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting volume", e)
+        }
+    }
+
+    /**
+     * 设置硬解码
+     */
+    override fun setHardwareDecode(useHardware: Boolean) {
+        hardwareDecodeEnabled = useHardware
+        // ExoPlayer会自动处理解码方式，这里可以根据需要进行配置
+    }
+
+    /**
+     * 检查是否正在播放
+     */
+    override fun isPlaying(): Boolean {
+        return exoPlayer?.isPlaying == true
+    }
+
+    /**
+     * 获取当前播放的电台
+     */
+    override fun getCurrentStation(): Station? = currentStation
+
+    /**
+     * 释放播放器资源
+     */
+    override fun release() {
+        try {
+            exoPlayer?.release()
+            exoPlayer = null
+            currentStation = null
+            _playbackState.postValue(PlaybackState.Stopped)
+            Log.d(TAG, "ExoPlayer released")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error releasing ExoPlayer", e)
+        }
+    }
+
+    // ==================== 内部监听器实现 ====================
+
+    private inner class ExoPlayerListener : Player.Listener {
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            when (playbackState) {
+                Player.STATE_BUFFERING -> {
+                    Log.d(TAG, "Buffering")
+                    _playbackState.postValue(PlaybackState.Buffering)
+                }
+                Player.STATE_READY -> {
+                    Log.d(TAG, "Ready")
+                    currentStation?.let {
+                        _playbackState.postValue(PlaybackState.Playing(it.name))
+                    }
+                }
+                Player.STATE_ENDED -> {
+                    Log.d(TAG, "Ended")
+                    _playbackState.postValue(PlaybackState.Stopped)
+                }
+                Player.STATE_IDLE -> {
+                    Log.d(TAG, "Idle")
+                }
+            }
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            Log.e(TAG, "Player error: ${error.message}")
+            _playbackState.postValue(PlaybackState.Error(error.message ?: "未知错误"))
+        }
+    }
+}

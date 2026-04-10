@@ -6,8 +6,10 @@ import android.os.Looper
 import android.util.Log
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.asFlow
 import com.example.ijkradio.data.Station
 import com.example.ijkradio.ui.PlaybackState
+import kotlinx.coroutines.flow.Flow
 import tv.danmaku.ijk.media.player.IjkMediaPlayer
 import tv.danmaku.ijk.media.player.IMediaPlayer
 import tv.danmaku.ijk.media.player.misc.ITrackInfo
@@ -16,7 +18,7 @@ import tv.danmaku.ijk.media.player.misc.ITrackInfo
  * IjkPlayer 播放器管理器单例类
  * 负责管理 IjkMediaPlayer 的生命周期和播放控制
  */
-class IjkPlayerManager private constructor(private val context: Context) {
+class IjkPlayerManager private constructor(private val context: Context) : IPlayerManager {
 
     companion object {
         private const val TAG = "IjkPlayerManager"
@@ -41,7 +43,11 @@ class IjkPlayerManager private constructor(private val context: Context) {
 
     // 播放状态
     private val _playbackState = MutableLiveData<PlaybackState>(PlaybackState.Stopped)
-    val playbackState: LiveData<PlaybackState> = _playbackState
+    val playbackStateLiveData: LiveData<PlaybackState> = _playbackState
+    
+    // 实现IPlayerManager接口的playbackState属性
+    override val playbackState: Flow<PlaybackState>
+        get() = _playbackState.asFlow()
 
     // 播放进度（用于音频可视化）
     private val _playbackPosition = MutableLiveData<Long>(0L)
@@ -63,7 +69,7 @@ class IjkPlayerManager private constructor(private val context: Context) {
     /**
      * 初始化播放器
      */
-    fun initialize() {
+    override fun initialize() {
         if (isInitialized) {
             Log.d(TAG, "Player already initialized")
             return
@@ -137,7 +143,7 @@ class IjkPlayerManager private constructor(private val context: Context) {
     /**
      * 播放电台
      */
-    fun playStation(station: Station) {
+    override fun playStation(station: Station) {
         Log.d(TAG, "Playing station: ${station.name}, URL: ${station.url}")
         currentStation = station
         _playbackState.postValue(PlaybackState.Buffering)
@@ -188,7 +194,7 @@ class IjkPlayerManager private constructor(private val context: Context) {
     /**
      * 暂停播放
      */
-    fun pause() {
+    override fun pause() {
         try {
             ijkPlayer?.let { player ->
                 if (player.isPlaying) {
@@ -205,7 +211,7 @@ class IjkPlayerManager private constructor(private val context: Context) {
     /**
      * 恢复播放
      */
-    fun resume() {
+    override fun resume() {
         try {
             ijkPlayer?.let { player ->
                 player.start()
@@ -222,7 +228,7 @@ class IjkPlayerManager private constructor(private val context: Context) {
     /**
      * 停止播放
      */
-    fun stop() {
+    override fun stop() {
         try {
             stopPositionUpdates()
             ijkPlayer?.stop()
@@ -236,7 +242,7 @@ class IjkPlayerManager private constructor(private val context: Context) {
      * 设置音量
      * @param volume 音量值 (0.0 - 1.0)
      */
-    fun setVolume(volume: Float) {
+    override fun setVolume(volume: Float) {
         currentVolume = volume.coerceIn(0f, 1f)
         try {
             ijkPlayer?.setVolume(currentVolume, currentVolume)
@@ -253,7 +259,7 @@ class IjkPlayerManager private constructor(private val context: Context) {
     /**
      * 设置硬解码开关
      */
-    fun setHardwareDecode(enabled: Boolean) {
+    override fun setHardwareDecode(enabled: Boolean) {
         hardwareDecodeEnabled = enabled
         if (isInitialized) {
             ijkPlayer?.let { player ->
@@ -276,19 +282,19 @@ class IjkPlayerManager private constructor(private val context: Context) {
     /**
      * 是否正在播放
      */
-    fun isPlaying(): Boolean {
+    override fun isPlaying(): Boolean {
         return ijkPlayer?.isPlaying == true
     }
 
     /**
      * 获取当前播放的电台
      */
-    fun getCurrentStation(): Station? = currentStation
+    override fun getCurrentStation(): Station? = currentStation
 
     /**
      * 释放播放器资源
      */
-    fun release() {
+    override fun release() {
         stopPositionUpdates()
         try {
             ijkPlayer?.release()

@@ -18,6 +18,7 @@ class StationStorage(private val context: Context) {
         private const val KEY_LAST_PLAYED_ID = "last_played_id"
         private const val KEY_LAST_VOLUME = "last_volume"
         private const val KEY_LAST_POSITION = "last_position"
+        private const val KEY_USE_EXO_PLAYER = "use_exo_player"
     }
 
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -255,5 +256,19 @@ class StationStorage(private val context: Context) {
      */
     fun markFirstRunComplete() {
         // 首次运行后会保存电台数据，所以只需检查KEY_STATIONS即可
+    }
+
+    /**
+     * 保存播放器引擎选择
+     */
+    fun saveUseExoPlayer(useExoPlayer: Boolean) {
+        prefs.edit().putBoolean(KEY_USE_EXO_PLAYER, useExoPlayer).apply()
+    }
+
+    /**
+     * 获取播放器引擎选择
+     */
+    fun getUseExoPlayer(): Boolean {
+        return prefs.getBoolean(KEY_USE_EXO_PLAYER, true) // 默认使用ExoPlayer
     }
 }
