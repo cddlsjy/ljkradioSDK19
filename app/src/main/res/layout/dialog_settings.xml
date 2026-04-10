@@ -73,20 +73,22 @@
             android:id="@+id/decode_mode_group"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical">
+            android:orientation="horizontal">
 
             <RadioButton
                 android:id="@+id/radio_hardware"
-                android:layout_width="match_parent"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="硬解码（默认）"
+                android:layout_weight="1"
+                android:text="硬解码"
                 android:checked="true" />
 
             <RadioButton
                 android:id="@+id/radio_software"
-                android:layout_width="match_parent"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="软解码（兼容模式）" />
+                android:layout_weight="1"
+                android:text="软解码" />
 
         </RadioGroup>
 

@@ -233,7 +233,7 @@ class MainActivity : AppCompatActivity() {
                 playPauseButton.setImageResource(R.drawable.ic_pause)
             }
             is PlaybackState.Playing -> {
-                statusTextView.text = getString(R.string.status_playing, state.stationName)
+                statusTextView.text = state.stationName
                 playPauseButton.setImageResource(R.drawable.ic_pause)
                 val station = stations.find { it.name == state.stationName }
                 stationAdapter.setPlayingStation(station)
@@ -409,7 +409,6 @@ class MainActivity : AppCompatActivity() {
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("设置")
             .setView(dialogView)
             .setPositiveButton("确定") { _, _ ->
                 // 保存解码方式设置
