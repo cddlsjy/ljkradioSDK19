@@ -7,7 +7,7 @@ pluginManagement {
 }
 
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS) // ✅ 关键修改！
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS) // ✅ 关键修改！
     repositories {
         google()
         mavenCentral()
