@@ -48,6 +48,6 @@ jobs:
     tag_name: v1.0.${{ github.run_number }}
     release_name: "APK Release ${{ github.run_number }}"
     body: "自动编译产物"
-  #  files: app/build/outputs/apk/debug/app-debug.apk   # 替换为你的APK路径
+  files: app/build/outputs/apk/debug/app-debug.apk   # 替换为你的APK路径
     
 
