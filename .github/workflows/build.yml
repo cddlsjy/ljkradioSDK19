@@ -49,5 +49,11 @@ jobs:
     release_name: "APK Release ${{ github.run_number }}"
     body: "自动编译产物"
   files: app/build/outputs/apk/debug/app-debug.apk   # 替换为你的APK路径
+
+
+  - name: Print Download URL
+  run: |
+    echo "APK 已上传至 Gitee debug，下载地址为：https://gitee.com/cddlsjy/ljkradiosdk19/debug"
+    
     
 
