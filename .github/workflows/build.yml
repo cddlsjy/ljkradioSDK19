@@ -32,3 +32,9 @@ jobs:
       with:
         name: app-debug
         path: app/build/outputs/apk/debug/app-debug.apk
+        
+- name: 查找并上传 APK 文件
+  run: |
+    # 在项目目录中搜索所有 .apk 文件，并打印出它们的完整路径
+    find . -name "*.apk" -type f
+
