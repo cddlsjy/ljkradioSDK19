@@ -1,0 +1,66 @@
+name: Build Android APK and Upload to Gitee
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build with Gradle
+        run: ./gradlew assembleDebug
+
+      - name: Upload APK to GitHub Artifacts (备份)
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: 查找 APK 路径（调试）
+        run: find . -name "*.apk" -type f
+
+      - name: Create Release on Gitee
+        id: gitee_release
+        run: |
+          REPO="cddlsjy/ljkradiosdk19"
+          RESP=$(curl -X POST \
+            -H "Authorization: token ${{ secrets.GITEE_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "tag_name": "v1.0.${{ github.run_number }}",
+              "name": "APK Release ${{ github.run_number }}",
+              "body": "自动编译产物"
+            }' \
+            "https://gitee.com/api/v5/repos/${REPO}/releases")
+          
+          echo "$RESP"
+          RELEASE_ID=$(echo "$RESP" | jq -r '.id')
+          if [ "$RELEASE_ID" = "null" ]; then
+            echo "创建 Release 失败，响应内容：$RESP"
+            exit 1
+          fi
+          echo "release_id=$RELEASE_ID" >> $GITHUB_OUTPUT
+
+      - name: Upload APK to Gitee Release
+        run: |
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITEE_TOKEN }}" \
+            -F "file=@app/build/outputs/apk/debug/app-debug.apk" \
+            "https://gitee.com/api/v5/repos/cddlsjy/ljkradiosdk19/releases/${{ steps.gitee_release.outputs.release_id }}/attachments"
