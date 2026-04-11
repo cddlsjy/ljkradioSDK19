@@ -36,6 +36,11 @@ jobs:
       - name: 查找 APK 路径（调试）
         run: find . -name "*.apk" -type f
 
+      - name: Test Gitee API connectivity
+          run: |
+          curl -H "Authorization: token ${{ secrets.GITEE_TOKEN }}" \
+      "https://gitee.com/api/v5/repos/cddlsjy/ljkradiosdk19"
+
       # ---------- 上传到 Gitee Release ----------
       - name: Create Release on Gitee
         id: gitee_release
