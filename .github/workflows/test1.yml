@@ -1,0 +1,27 @@
+- name: Create Release on Gitee
+  id: gitee_release
+  run: |
+    RESP=$(curl -X POST \
+      -H "Authorization: token ${{ secrets.GITEE_TOKEN }}" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "tag_name": "v1.0.${{ github.run_number }}",
+        "name": "APK Release ${{ github.run_number }}",
+        "body": "自动编译产物"
+      }' \
+      "https://gitee.com/api/v5/repos/cddlsjy/ljkradiosdk19/releases")
+    
+    echo "$RESP"
+    RELEASE_ID=$(echo "$RESP" | jq -r '.id')
+    if [ "$RELEASE_ID" = "null" ]; then
+      echo "创建 Release 失败"
+      exit 1
+    fi
+    echo "release_id=$RELEASE_ID" >> $GITHUB_OUTPUT
+
+- name: Upload APK to Gitee Release
+  run: |
+    curl -X POST \
+      -H "Authorization: token ${{ secrets.GITEE_TOKEN }}" \
+      -F "file=@app/build/outputs/apk/debug/app-debug.apk" \
+      "https://gitee.com/api/v5/repos/cddlsjy/ljkradiosdk19/releases/${{ steps.gitee_release.outputs.release_id }}/attachments"
