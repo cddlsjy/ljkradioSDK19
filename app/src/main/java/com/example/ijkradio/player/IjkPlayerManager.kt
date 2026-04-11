@@ -154,33 +154,34 @@ class IjkPlayerManager private constructor(private val context: Context) : IPlay
                 player.configurePlayer()
                 player.setupListeners()
 
-                // 为所有电台添加通用 HTTP 头，模拟浏览器请求
+                // ========== HTTP 头设置（完整替换） ==========
+                // 通用 User-Agent（模拟浏览器）
                 player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "user_agent",
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-                
-                // 为央广/环球资讯添加特殊 HTTP 头
-                if (station.url.contains("cri.cn") || station.url.contains("sk.cri.cn")) {
-                    player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "referer",
-                        "https://sk.cri.cn/")
+
+                // 关键：告诉服务器需要 ICY 元数据（Shoutcast/Icecast 流必需）
+                player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "icy", 1)
+                // 启用 ICY 元数据解析（可选，用于获取歌曲信息）
+                player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "icy_metadata", 1)
+
+                // 根据域名设置特定 Referer
+                val referer = when {
+                    station.url.contains("cri.cn") || station.url.contains("sk.cri.cn") -> "https://sk.cri.cn/"
+                    station.url.contains("hnradio.com") -> "http://a.live.hnradio.com/"
+                    station.url.contains("cnr.cn") -> "http://ngcdn001.cnr.cn/"
+                    station.url.contains("asiafm.hk") || station.url.contains("asiafm.net") || station.url.contains("goldfm.cn") -> "http://asiafm.hk/"
+                    station.url.contains("qingting.fm") -> "https://www.qingting.fm/"
+                    else -> null
                 }
-                
-                // 为其他电台添加适当的 referer
-                else if (station.url.contains("hnradio.com")) {
-                    player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "referer",
-                        "http://a.live.hnradio.com/")
+                referer?.let {
+                    player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "referer", it)
                 }
-                else if (station.url.contains("cnr.cn")) {
-                    player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "referer",
-                        "http://ngcdn001.cnr.cn/")
+
+                // 央广流可能需要保持长连接
+                if (station.url.contains("cnr.cn")) {
+                    player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "multiple_requests", 1)
                 }
-                else if (station.url.contains("asiafm.hk") || station.url.contains("asiafm.net") || station.url.contains("goldfm.cn")) {
-                    player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "referer",
-                        "http://asiafm.hk/")
-                }
-                else if (station.url.contains("qingting.fm")) {
-                    player.setOption(IjkMediaPlayer.OPT_CATEGORY_FORMAT, "referer",
-                        "https://www.qingting.fm/")
-                }
+                // ================================================
 
                 player.dataSource = station.url
                 player.prepareAsync()

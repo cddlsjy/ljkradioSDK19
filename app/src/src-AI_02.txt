@@ -15,6 +15,8 @@
 │   │               │   ├── Station.kt
 │   │               │   └── StationStorage.kt
 │   │               ├── player
+│   │               │   ├── ExoPlayerManager.kt
+│   │               │   ├── IPlayerManager.kt
 │   │               │   └── IjkPlayerManager.kt
 │   │               ├── ui
 │   │               │   ├── PlaybackState.kt
@@ -49,6 +51,8 @@
 │           ├── colors.xml
 │           ├── strings.xml
 │           └── themes.xml
+├── src-AI.txt
+├── src-AI_01.txt
 └── src-AI_06.txt
 
 ================================================================================
@@ -67,10 +71,14 @@ import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.RecyclerView
+import kotlinx.coroutines.launch
 import androidx.recyclerview.widget.ItemTouchHelper
 import com.example.ijkradio.data.Station
 import com.example.ijkradio.data.StationStorage
+import com.example.ijkradio.player.IPlayerManager
+import com.example.ijkradio.player.ExoPlayerManager
 import com.example.ijkradio.player.IjkPlayerManager
 import com.example.ijkradio.ui.PlaybackState
 import com.example.ijkradio.ui.StationAdapter
@@ -101,7 +109,7 @@ class MainActivity : AppCompatActivity() {
 
     // 数据和播放器
     private lateinit var stationStorage: StationStorage
-    private lateinit var playerManager: IjkPlayerManager
+    private lateinit var playerManager: IPlayerManager
 
     // 电台列表
     private var stations: MutableList<Station> = mutableListOf()
@@ -151,7 +159,13 @@ class MainActivity : AppCompatActivity() {
      * 初始化播放器
      */
     private fun initPlayer() {
-        playerManager = IjkPlayerManager.getInstance(this)
+        // 根据保存的播放器引擎选择初始化播放器
+        val useExoPlayer = stationStorage.getUseExoPlayer()
+        playerManager = if (useExoPlayer) {
+            ExoPlayerManager.getInstance(this)
+        } else {
+            IjkPlayerManager.getInstance(this)
+        }
         playerManager.initialize()
 
         // 设置保存的音量
@@ -213,8 +227,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         // 监听播放器状态
-        playerManager.playbackState.observe(this) {
-            updatePlaybackUI(it)
+        lifecycleScope.launch {
+            playerManager.playbackState.collect {
+                updatePlaybackUI(it)
+            }
         }
     }
 
@@ -292,7 +308,7 @@ class MainActivity : AppCompatActivity() {
                 playPauseButton.setImageResource(R.drawable.ic_pause)
             }
             is PlaybackState.Playing -> {
-                statusTextView.text = getString(R.string.status_playing, state.stationName)
+                statusTextView.text = state.stationName
                 playPauseButton.setImageResource(R.drawable.ic_pause)
                 val station = stations.find { it.name == state.stationName }
                 stationAdapter.setPlayingStation(station)
@@ -429,6 +445,8 @@ class MainActivity : AppCompatActivity() {
 
         volumeSlider = dialogView.findViewById<Slider>(R.id.volume_slider)
         volumeIcon = dialogView.findViewById<ImageView>(R.id.volume_icon)
+        val radioExo = dialogView.findViewById<RadioButton>(R.id.radio_exo)
+        val radioIjk = dialogView.findViewById<RadioButton>(R.id.radio_ijk)
         val radioHardware = dialogView.findViewById<RadioButton>(R.id.radio_hardware)
         val radioSoftware = dialogView.findViewById<RadioButton>(R.id.radio_software)
         val autoPlaySwitch = dialogView.findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.auto_play_switch)
@@ -437,6 +455,14 @@ class MainActivity : AppCompatActivity() {
         // 初始化音量滑块
         volumeSlider.value = stationStorage.getVolume()
         updateVolumeIcon(stationStorage.getVolume())
+
+        // 初始化播放器引擎
+        val useExoPlayer = stationStorage.getUseExoPlayer()
+        if (useExoPlayer) {
+            radioExo.isChecked = true
+        } else {
+            radioIjk.isChecked = true
+        }
 
         // 初始化解码方式，默认打开软解码
         radioSoftware.isChecked = true
@@ -468,9 +494,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         val dialog = AlertDialog.Builder(this)
-            .setTitle("设置")
             .setView(dialogView)
             .setPositiveButton("确定") { _, _ ->
+                // 保存播放器引擎设置
+                val useExoPlayer = radioExo.isChecked
+                stationStorage.saveUseExoPlayer(useExoPlayer)
+                
                 // 保存解码方式设置
                 val useHardwareDecode = radioHardware.isChecked
                 playerManager.setHardwareDecode(useHardwareDecode)
@@ -642,6 +671,7 @@ class StationStorage(private val context: Context) {
         private const val KEY_LAST_PLAYED_ID = "last_played_id"
         private const val KEY_LAST_VOLUME = "last_volume"
         private const val KEY_LAST_POSITION = "last_position"
+        private const val KEY_USE_EXO_PLAYER = "use_exo_player"
     }
 
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -880,6 +910,256 @@ class StationStorage(private val context: Context) {
     fun markFirstRunComplete() {
         // 首次运行后会保存电台数据，所以只需检查KEY_STATIONS即可
     }
+
+    /**
+     * 保存播放器引擎选择
+     */
+    fun saveUseExoPlayer(useExoPlayer: Boolean) {
+        prefs.edit().putBoolean(KEY_USE_EXO_PLAYER, useExoPlayer).apply()
+    }
+
+    /**
+     * 获取播放器引擎选择
+     */
+    fun getUseExoPlayer(): Boolean {
+        return prefs.getBoolean(KEY_USE_EXO_PLAYER, true) // 默认使用ExoPlayer
+    }
+}
+```
+
+## 文件: main/java/com/example/ijkradio/player/ExoPlayerManager.kt
+```kt
+package com.example.ijkradio.player
+
+import android.content.Context
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.asFlow
+import com.example.ijkradio.data.Station
+import com.example.ijkradio.ui.PlaybackState
+import com.google.android.exoplayer2.*
+import com.google.android.exoplayer2.audio.AudioAttributes
+import com.google.android.exoplayer2.source.ProgressiveMediaSource
+import com.google.android.exoplayer2.upstream.DefaultDataSourceFactory
+import com.google.android.exoplayer2.util.Util
+import kotlinx.coroutines.flow.Flow
+
+/**
+ * ExoPlayer 播放器管理器单例类
+ * 负责管理 ExoPlayer 的生命周期和播放控制
+ */
+class ExoPlayerManager private constructor(private val context: Context) : IPlayerManager {
+
+    companion object {
+        private const val TAG = "ExoPlayerManager"
+
+        @Volatile
+        private var instance: ExoPlayerManager? = null
+
+        fun getInstance(context: Context): ExoPlayerManager {
+            return instance ?: synchronized(this) {
+                instance ?: ExoPlayerManager(context.applicationContext).also { instance = it }
+            }
+        }
+    }
+
+    // 播放器实例
+    private var exoPlayer: ExoPlayer? = null
+
+    // 当前播放的电台
+    private var currentStation: Station? = null
+
+    // 播放状态
+    private val _playbackState = MutableLiveData<PlaybackState>(PlaybackState.Stopped)
+    
+    // 实现IPlayerManager接口的playbackState属性
+    override val playbackState: Flow<PlaybackState>
+        get() = _playbackState.asFlow()
+
+    // 音量 (0.0 - 1.0)
+    private var currentVolume = 1.0f
+
+    // 硬解码开关
+    private var hardwareDecodeEnabled = true
+
+    /**
+     * 初始化播放器
+     */
+    override fun initialize() {
+        try {
+            // 创建ExoPlayer实例
+            exoPlayer = ExoPlayer.Builder(context)
+                .setAudioAttributes(AudioAttributes.DEFAULT, true)
+                .setHandleAudioBecomingNoisy(true)
+                .build()
+
+            // 设置播放器监听器
+            exoPlayer?.addListener(ExoPlayerListener())
+
+            Log.d(TAG, "ExoPlayer initialized successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize ExoPlayer", e)
+            _playbackState.postValue(PlaybackState.Error("播放器初始化失败: ${e.message}"))
+        }
+    }
+
+    /**
+     * 播放电台
+     */
+    override fun playStation(station: Station) {
+        Log.d(TAG, "Playing station: ${station.name}, URL: ${station.url}")
+        currentStation = station
+        _playbackState.postValue(PlaybackState.Buffering)
+
+        try {
+            exoPlayer?.let { player ->
+                // 创建数据源工厂
+                val dataSourceFactory = DefaultDataSourceFactory(
+                    context,
+                    Util.getUserAgent(context, "IjkRadioPlayer")
+                )
+
+                // 创建媒体源
+                val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
+                    .createMediaSource(MediaItem.fromUri(Uri.parse(station.url)))
+
+                // 准备播放器
+                player.setMediaSource(mediaSource)
+                player.prepare()
+                player.play()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error playing station", e)
+            _playbackState.postValue(PlaybackState.Error("播放失败: ${e.message}"))
+        }
+    }
+
+    /**
+     * 暂停播放
+     */
+    override fun pause() {
+        try {
+            exoPlayer?.let { player ->
+                if (player.isPlaying) {
+                    player.pause()
+                    _playbackState.postValue(PlaybackState.Paused)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error pausing playback", e)
+        }
+    }
+
+    /**
+     * 恢复播放
+     */
+    override fun resume() {
+        try {
+            exoPlayer?.let { player ->
+                player.play()
+                currentStation?.let { station ->
+                    _playbackState.postValue(PlaybackState.Playing(station.name))
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error resuming playback", e)
+        }
+    }
+
+    /**
+     * 停止播放
+     */
+    override fun stop() {
+        try {
+            exoPlayer?.let { player ->
+                player.stop()
+                _playbackState.postValue(PlaybackState.Stopped)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping playback", e)
+        }
+    }
+
+    /**
+     * 设置音量
+     */
+    override fun setVolume(volume: Float) {
+        currentVolume = volume.coerceIn(0f, 1f)
+        try {
+            exoPlayer?.volume = currentVolume
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting volume", e)
+        }
+    }
+
+    /**
+     * 设置硬解码
+     */
+    override fun setHardwareDecode(useHardware: Boolean) {
+        hardwareDecodeEnabled = useHardware
+        // ExoPlayer会自动处理解码方式，这里可以根据需要进行配置
+    }
+
+    /**
+     * 检查是否正在播放
+     */
+    override fun isPlaying(): Boolean {
+        return exoPlayer?.isPlaying == true
+    }
+
+    /**
+     * 获取当前播放的电台
+     */
+    override fun getCurrentStation(): Station? = currentStation
+
+    /**
+     * 释放播放器资源
+     */
+    override fun release() {
+        try {
+            exoPlayer?.release()
+            exoPlayer = null
+            currentStation = null
+            _playbackState.postValue(PlaybackState.Stopped)
+            Log.d(TAG, "ExoPlayer released")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error releasing ExoPlayer", e)
+        }
+    }
+
+    // ==================== 内部监听器实现 ====================
+
+    private inner class ExoPlayerListener : Player.Listener {
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            when (playbackState) {
+                Player.STATE_BUFFERING -> {
+                    Log.d(TAG, "Buffering")
+                    _playbackState.postValue(PlaybackState.Buffering)
+                }
+                Player.STATE_READY -> {
+                    Log.d(TAG, "Ready")
+                    currentStation?.let {
+                        _playbackState.postValue(PlaybackState.Playing(it.name))
+                    }
+                }
+                Player.STATE_ENDED -> {
+                    Log.d(TAG, "Ended")
+                    _playbackState.postValue(PlaybackState.Stopped)
+                }
+                Player.STATE_IDLE -> {
+                    Log.d(TAG, "Idle")
+                }
+            }
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            Log.e(TAG, "Player error: ${error.message}")
+            _playbackState.postValue(PlaybackState.Error(error.message ?: "未知错误"))
+        }
+    }
 }
 ```
 
@@ -893,8 +1173,10 @@ import android.os.Looper
 import android.util.Log
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
+import androidx.lifecycle.asFlow
 import com.example.ijkradio.data.Station
 import com.example.ijkradio.ui.PlaybackState
+import kotlinx.coroutines.flow.Flow
 import tv.danmaku.ijk.media.player.IjkMediaPlayer
 import tv.danmaku.ijk.media.player.IMediaPlayer
 import tv.danmaku.ijk.media.player.misc.ITrackInfo
@@ -903,7 +1185,7 @@ import tv.danmaku.ijk.media.player.misc.ITrackInfo
  * IjkPlayer 播放器管理器单例类
  * 负责管理 IjkMediaPlayer 的生命周期和播放控制
  */
-class IjkPlayerManager private constructor(private val context: Context) {
+class IjkPlayerManager private constructor(private val context: Context) : IPlayerManager {
 
     companion object {
         private const val TAG = "IjkPlayerManager"
@@ -928,7 +1210,11 @@ class IjkPlayerManager private constructor(private val context: Context) {
 
     // 播放状态
     private val _playbackState = MutableLiveData<PlaybackState>(PlaybackState.Stopped)
-    val playbackState: LiveData<PlaybackState> = _playbackState
+    val playbackStateLiveData: LiveData<PlaybackState> = _playbackState
+    
+    // 实现IPlayerManager接口的playbackState属性
+    override val playbackState: Flow<PlaybackState>
+        get() = _playbackState.asFlow()
 
     // 播放进度（用于音频可视化）
     private val _playbackPosition = MutableLiveData<Long>(0L)
@@ -950,7 +1236,7 @@ class IjkPlayerManager private constructor(private val context: Context) {
     /**
      * 初始化播放器
      */
-    fun initialize() {
+    override fun initialize() {
         if (isInitialized) {
             Log.d(TAG, "Player already initialized")
             return
@@ -1024,7 +1310,7 @@ class IjkPlayerManager private constructor(private val context: Context) {
     /**
      * 播放电台
      */
-    fun playStation(station: Station) {
+    override fun playStation(station: Station) {
         Log.d(TAG, "Playing station: ${station.name}, URL: ${station.url}")
         currentStation = station
         _playbackState.postValue(PlaybackState.Buffering)
@@ -1075,7 +1361,7 @@ class IjkPlayerManager private constructor(private val context: Context) {
     /**
      * 暂停播放
      */
-    fun pause() {
+    override fun pause() {
         try {
             ijkPlayer?.let { player ->
                 if (player.isPlaying) {
@@ -1092,7 +1378,7 @@ class IjkPlayerManager private constructor(private val context: Context) {
     /**
      * 恢复播放
      */
-    fun resume() {
+    override fun resume() {
         try {
             ijkPlayer?.let { player ->
                 player.start()
@@ -1109,7 +1395,7 @@ class IjkPlayerManager private constructor(private val context: Context) {
     /**
      * 停止播放
      */
-    fun stop() {
+    override fun stop() {
         try {
             stopPositionUpdates()
             ijkPlayer?.stop()
@@ -1123,7 +1409,7 @@ class IjkPlayerManager private constructor(private val context: Context) {
      * 设置音量
      * @param volume 音量值 (0.0 - 1.0)
      */
-    fun setVolume(volume: Float) {
+    override fun setVolume(volume: Float) {
         currentVolume = volume.coerceIn(0f, 1f)
         try {
             ijkPlayer?.setVolume(currentVolume, currentVolume)
@@ -1140,7 +1426,7 @@ class IjkPlayerManager private constructor(private val context: Context) {
     /**
      * 设置硬解码开关
      */
-    fun setHardwareDecode(enabled: Boolean) {
+    override fun setHardwareDecode(enabled: Boolean) {
         hardwareDecodeEnabled = enabled
         if (isInitialized) {
             ijkPlayer?.let { player ->
@@ -1163,19 +1449,19 @@ class IjkPlayerManager private constructor(private val context: Context) {
     /**
      * 是否正在播放
      */
-    fun isPlaying(): Boolean {
+    override fun isPlaying(): Boolean {
         return ijkPlayer?.isPlaying == true
     }
 
     /**
      * 获取当前播放的电台
      */
-    fun getCurrentStation(): Station? = currentStation
+    override fun getCurrentStation(): Station? = currentStation
 
     /**
      * 释放播放器资源
      */
-    fun release() {
+    override fun release() {
         stopPositionUpdates()
         try {
             ijkPlayer?.release()
@@ -1288,6 +1574,77 @@ class IjkPlayerManager private constructor(private val context: Context) {
             }
         }
     }
+}
+```
+
+## 文件: main/java/com/example/ijkradio/player/IPlayerManager.kt
+```kt
+package com.example.ijkradio.player
+
+import com.example.ijkradio.data.Station
+import com.example.ijkradio.ui.PlaybackState
+import kotlinx.coroutines.flow.Flow
+
+/**
+ * 播放器管理接口
+ * 定义播放器的通用方法
+ */
+interface IPlayerManager {
+    
+    /**
+     * 初始化播放器
+     */
+    fun initialize()
+    
+    /**
+     * 释放播放器资源
+     */
+    fun release()
+    
+    /**
+     * 播放电台
+     */
+    fun playStation(station: Station)
+    
+    /**
+     * 暂停播放
+     */
+    fun pause()
+    
+    /**
+     * 恢复播放
+     */
+    fun resume()
+    
+    /**
+     * 停止播放
+     */
+    fun stop()
+    
+    /**
+     * 设置音量
+     */
+    fun setVolume(volume: Float)
+    
+    /**
+     * 设置硬解码
+     */
+    fun setHardwareDecode(useHardware: Boolean)
+    
+    /**
+     * 检查是否正在播放
+     */
+    fun isPlaying(): Boolean
+    
+    /**
+     * 获取当前播放的电台
+     */
+    fun getCurrentStation(): Station?
+    
+    /**
+     * 获取播放状态
+     */
+    val playbackState: Flow<PlaybackState>
 }
 ```
 
@@ -2116,6 +2473,46 @@ XML文件内容
 
     </LinearLayout>
 
+    <!-- 播放器引擎 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:layout_marginBottom="24dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="播放器引擎"
+            android:textSize="16sp"
+            android:textColor="@color/text_primary"
+            android:layout_marginBottom="12dp" />
+
+        <RadioGroup
+            android:id="@+id/player_engine_group"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <RadioButton
+                android:id="@+id/radio_exo"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="ExoPlayer"
+                android:checked="true" />
+
+            <RadioButton
+                android:id="@+id/radio_ijk"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="IjkPlayer" />
+
+        </RadioGroup>
+
+    </LinearLayout>
+
     <!-- 解码方式 -->
     <LinearLayout
         android:layout_width="match_parent"
@@ -2134,20 +2531,22 @@ XML文件内容
             android:id="@+id/decode_mode_group"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical">
+            android:orientation="horizontal">
 
             <RadioButton
                 android:id="@+id/radio_hardware"
-                android:layout_width="match_parent"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="硬解码（默认）"
+                android:layout_weight="1"
+                android:text="硬解码"
                 android:checked="true" />
 
             <RadioButton
                 android:id="@+id/radio_software"
-                android:layout_width="match_parent"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="软解码（兼容模式）" />
+                android:layout_weight="1"
+                android:text="软解码" />
 
         </RadioGroup>
 

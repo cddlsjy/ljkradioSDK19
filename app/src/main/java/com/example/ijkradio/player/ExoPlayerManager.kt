@@ -2,6 +2,7 @@ package com.example.ijkradio.player
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -12,6 +13,7 @@ import com.example.ijkradio.ui.PlaybackState
 import com.google.android.exoplayer2.*
 import com.google.android.exoplayer2.audio.AudioAttributes
 import com.google.android.exoplayer2.source.ProgressiveMediaSource
+import com.google.android.exoplayer2.source.hls.HlsMediaSource
 import com.google.android.exoplayer2.upstream.DefaultDataSourceFactory
 import com.google.android.exoplayer2.util.Util
 import kotlinx.coroutines.flow.Flow
@@ -85,17 +87,37 @@ class ExoPlayerManager private constructor(private val context: Context) : IPlay
 
         try {
             exoPlayer?.let { player ->
-                // 创建数据源工厂
                 val dataSourceFactory = DefaultDataSourceFactory(
                     context,
                     Util.getUserAgent(context, "IjkRadioPlayer")
                 )
 
-                // 创建媒体源
-                val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory)
-                    .createMediaSource(MediaItem.fromUri(Uri.parse(station.url)))
+                val uri = Uri.parse(station.url)
+                val mediaItemBuilder = MediaItem.Builder().setUri(uri)
 
-                // 准备播放器
+                // 仅在 API 21+ 设置追帧速度（SDK 19 跳过）
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    mediaItemBuilder.setLiveConfiguration(
+                        MediaItem.LiveConfiguration.Builder()
+                            .setMaxPlaybackSpeed(1.02f)
+                            .build()
+                    )
+                }
+                val mediaItem = mediaItemBuilder.build()
+
+                val mediaSource = when {
+                    uri.lastPathSegment?.endsWith(".m3u8", ignoreCase = true) == true ||
+                    Util.inferContentType(uri) == C.TYPE_HLS -> {
+                        // SDK 19 兼容：不使用 setAllowChunklessPreparation
+                        HlsMediaSource.Factory(dataSourceFactory)
+                            .createMediaSource(mediaItem)
+                    }
+                    else -> {
+                        ProgressiveMediaSource.Factory(dataSourceFactory)
+                            .createMediaSource(mediaItem)
+                    }
+                }
+
                 player.setMediaSource(mediaSource)
                 player.prepare()
                 player.play()

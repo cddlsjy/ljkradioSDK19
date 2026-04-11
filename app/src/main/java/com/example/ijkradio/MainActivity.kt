@@ -53,6 +53,8 @@ class MainActivity : AppCompatActivity() {
     private var selectedStation: Station? = null
     private var autoPlayEnabled = true   // 遥控器移动焦点时自动播放
     private var autoPlayLastStationEnabled = true   // 自动播放上一次播放的电台
+    // 用于引擎切换时无声恢复暂停状态
+    private var pendingAutoPause = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,7 +65,7 @@ class MainActivity : AppCompatActivity() {
         // 初始化组件
         initStorage()
         initViews()
-        initPlayer()
+        initPlayer(stationStorage.getUseExoPlayer())
         initRecyclerView()
         setupListeners()
 
@@ -95,18 +97,16 @@ class MainActivity : AppCompatActivity() {
     /**
      * 初始化播放器
      */
-    private fun initPlayer() {
-        // 根据保存的播放器引擎选择初始化播放器
-        val useExoPlayer = stationStorage.getUseExoPlayer()
+    private fun initPlayer(useExoPlayer: Boolean) {
         playerManager = if (useExoPlayer) {
             ExoPlayerManager.getInstance(this)
         } else {
             IjkPlayerManager.getInstance(this)
         }
         playerManager.initialize()
-
-        // 设置保存的音量
         playerManager.setVolume(stationStorage.getVolume())
+        // 应用保存的硬解码设置
+        playerManager.setHardwareDecode(stationStorage.getUseHardwareDecode())
     }
 
     /**
@@ -196,6 +196,52 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * 切换播放器引擎
+     */
+    private fun switchPlayerEngine(useExoPlayer: Boolean) {
+        val wasPlaying = playerManager.isPlaying()
+        val currentStation = playerManager.getCurrentStation()
+        val wasPaused = !wasPlaying && currentStation != null
+
+        // 释放旧播放器
+        playerManager.release()
+
+        // 创建新播放器
+        initPlayer(useExoPlayer)
+
+        // 重新订阅播放状态（因为 playerManager 实例已更新）
+        lifecycleScope.launch {
+            playerManager.playbackState.collect {
+                updatePlaybackUI(it)
+            }
+        }
+
+        // 恢复播放状态
+        when {
+            wasPlaying && currentStation != null -> {
+                playerManager.playStation(currentStation)
+            }
+            wasPaused && currentStation != null -> {
+                // 设置标志位，待播放器准备好后自动暂停（无声恢复）
+                pendingAutoPause = true
+                playerManager.playStation(currentStation)
+            }
+        }
+
+        // 更新 UI 选中状态
+        if (currentStation != null) {
+            selectedStation = currentStation
+            stationAdapter.setSelectedStation(currentStation)
+        }
+
+        Toast.makeText(
+            this,
+            "播放器引擎已切换为 ${if (useExoPlayer) "ExoPlayer" else "IjkPlayer"}",
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+
+    /**
      * 电台点击事件
      */
     private fun onStationClicked(station: Station) {
@@ -249,6 +295,12 @@ class MainActivity : AppCompatActivity() {
                 playPauseButton.setImageResource(R.drawable.ic_pause)
                 val station = stations.find { it.name == state.stationName }
                 stationAdapter.setPlayingStation(station)
+
+                // 如果处于待自动暂停状态，立即暂停（无声恢复）
+                if (pendingAutoPause) {
+                    pendingAutoPause = false
+                    playerManager.pause()
+                }
             }
             is PlaybackState.Paused -> {
                 statusTextView.text = getString(R.string.status_paused)
@@ -433,13 +485,30 @@ class MainActivity : AppCompatActivity() {
         val dialog = AlertDialog.Builder(this)
             .setView(dialogView)
             .setPositiveButton("确定") { _, _ ->
-                // 保存播放器引擎设置
-                val useExoPlayer = radioExo.isChecked
-                stationStorage.saveUseExoPlayer(useExoPlayer)
-                
-                // 保存解码方式设置
+                val useExoPlayerNew = radioExo.isChecked
+                val oldUseExoPlayer = stationStorage.getUseExoPlayer()
                 val useHardwareDecode = radioHardware.isChecked
-                playerManager.setHardwareDecode(useHardwareDecode)
+
+                // 保存音量
+                val volume = volumeSlider.value
+                playerManager.setVolume(volume)
+                stationStorage.saveVolume(volume)
+
+                // 保存自动播放开关状态（成员变量已在 Switch 监听器中更新，无需额外保存）
+
+                // 保存播放器引擎设置
+                stationStorage.saveUseExoPlayer(useExoPlayerNew)
+
+                // 保存硬解码设置
+                stationStorage.saveUseHardwareDecode(useHardwareDecode)
+
+                // 如果引擎发生变化，切换播放器
+                if (useExoPlayerNew != oldUseExoPlayer) {
+                    switchPlayerEngine(useExoPlayerNew)
+                } else {
+                    // 引擎未变，仅应用解码方式
+                    playerManager.setHardwareDecode(useHardwareDecode)
+                }
             }
             .setNegativeButton("取消", null)
             .create()

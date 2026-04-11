@@ -19,6 +19,7 @@ class StationStorage(private val context: Context) {
         private const val KEY_LAST_VOLUME = "last_volume"
         private const val KEY_LAST_POSITION = "last_position"
         private const val KEY_USE_EXO_PLAYER = "use_exo_player"
+        private const val KEY_USE_HARDWARE_DECODE = "use_hardware_decode"
     }
 
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -270,5 +271,19 @@ class StationStorage(private val context: Context) {
      */
     fun getUseExoPlayer(): Boolean {
         return prefs.getBoolean(KEY_USE_EXO_PLAYER, true) // 默认使用ExoPlayer
+    }
+
+    /**
+     * 保存硬解码设置
+     */
+    fun saveUseHardwareDecode(useHardware: Boolean) {
+        prefs.edit().putBoolean(KEY_USE_HARDWARE_DECODE, useHardware).apply()
+    }
+
+    /**
+     * 获取硬解码设置（默认 true）
+     */
+    fun getUseHardwareDecode(): Boolean {
+        return prefs.getBoolean(KEY_USE_HARDWARE_DECODE, true)
     }
 }
