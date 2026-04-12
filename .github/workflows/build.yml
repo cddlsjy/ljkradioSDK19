@@ -33,27 +33,8 @@ jobs:
         name: app-debug
         path: app/build/outputs/apk/debug/app-debug.apk
         
-- name: 查找并上传 APK 文件
-  run: |
-    # 在项目目录中搜索所有 .apk 文件，并打印出它们的完整路径
-    find . -name "*.apk" -type f
 
 
 
-    - name: Create Gitee Release and Upload APK
-  uses: nogsantos/gitee-debug-cli-action@v1
-  with:
-    token: ${{ secrets.GITEE_TOKEN }}
-    repo:    cddlsjy/ljkradiosdk19      #你的Gitee用户名/仓库名
-    tag_name: v1.0.${{ github.run_number }}
-    release_name: "APK Release ${{ github.run_number }}"
-    body: "自动编译产物"
-  files: app/build/outputs/apk/debug/app-debug.apk   # 替换为你的APK路径
 
-
-  - name: Print Download URL
-  run: |
-    echo "APK 已上传至 Gitee debug，下载地址为：https://gitee.com/cddlsjy/ljkradiosdk19/debug"
-    
-    
 
